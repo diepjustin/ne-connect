@@ -1,0 +1,4 @@
+# Phase 0 is deliberately dependency-free beyond the stdlib -- deterministic
+# normalization and exact-key joins only. Fuzzy matching (splink/dedupe) lands
+# in phase 1, once phase 0 has shown the join is worth the machinery.
+pytest>=7.0
