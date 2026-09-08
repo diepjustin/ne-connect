@@ -1,4 +1,15 @@
-data/
+# Everything under data/ is rebuilt from the sibling projects and stays out of
+# git -- EXCEPT data/manual/, the human decision files, which are
+# version-controlled and never machine-overwritten (CLAUDE.md rule 4,
+# docs/ENTITY_RESOLUTION.md).
+#
+# Written as data/* rather than data/ because git will not re-include a path
+# inside a wholly excluded directory: the negation is only reachable if the
+# directory itself was never excluded.
+data/*
+!data/manual/
+data/manual/*
+!data/manual/*.csv
 venv/
 __pycache__/
 *.pyc

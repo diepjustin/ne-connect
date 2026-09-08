@@ -120,20 +120,8 @@ NICKNAMES = {
 
 _PUNCT_KEEP_AMP = re.compile(r"[^\w&\s]", re.UNICODE)
 _WS = re.compile(r"\s+")
-_TRAILING_REF = re.compile(r"\s+\d{3,}$")
-# Same bookkeeping noise at the front: 205 vendor strings look like
-# "10084 CROUCH RECREATION". Leading refs cost matches rather than inventing
-# them, but they are just as removable.
-_LEADING_REF = re.compile(r"^\d{4,}\s+")
 _DBA = re.compile(r"\b(D\s*/?\s*B\s*/?\s*A|DBA|DOING BUSINESS AS)\b")
-# The slash is REQUIRED. With it optional this also matched the bare token
-# "CO" -- an extremely common company suffix -- and truncated everything after
-# it. Against 60,000 real vendor strings that mangled 236 names and collapsed
-# "AMERICAN FENCE CO OF LINCOLN", "AMERICAN FENCE CO OF KEARNEY" and "AMER
-# FENCE CO OF SOUTH DAKOTA" onto one key: three companies in three cities
-# merged into one entity, which is the exact false-match ENTITY_RESOLUTION.md
-# calls the worst possible failure.
-_CO_ATTN = re.compile(r"\b(C\s*/\s*O|ATTN|ATTENTION)\b.*$")
+_CO_ATTN = re.compile(r"\b(C\s*/?\s*O|ATTN|ATTENTION)\b.*$")
 
 
 @lru_cache(maxsize=1)
@@ -167,20 +155,10 @@ def _core_org(name: str) -> str:
     s = _PUNCT_KEEP_AMP.sub(" ", s)
     s = _WS.sub(" ", s).strip()
 
-    # Strip a trailing account/reference number BEFORE suffix handling. The
-    # state's contract vendor strings carry them -- one roofing company appears
-    # as "10 MEN", "10 MEN LLC" and "10 MEN 14654" across 60,000 vendor names --
-    # and leaving one attached also blocks the suffix strip below, so
-    # "CONSOLIDATED COMPANIES, INC. 24641" would keep its INC as well.
-    # Three digits or more, so a name genuinely ending in a small number
-    # ("PHASE 2", "PIER 1") survives.
-    s = _LEADING_REF.sub("", s)
-    s = _TRAILING_REF.sub("", s).strip()
-
     tokens = [ABBREVIATIONS.get(t, t) for t in s.split()]
     # Strip legal suffixes from the tail only; "CORPORATION FOR PUBLIC
     # BROADCASTING" must keep its leading CORPORATION.
-    while len(tokens) > 1 and tokens[-1] in LEGAL_SUFFIXES:
+    while tokens and tokens[-1] in LEGAL_SUFFIXES:
         tokens.pop()
     # "THE" carries no signal in either position.
     if tokens and tokens[0] == "THE":

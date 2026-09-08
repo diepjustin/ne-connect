@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NE Connect — Nebraska public records, cross-searched</title>
+<meta name="description" content="Search Nebraska state contracts, campaign finance, lobbying and other public records in one place. Every result links to the state's own document.">
+<!--
+  SKELETON. See docs/UI_SPEC.md before building this out.
+
+  Deliberate choices already made here, don't undo them casually:
+  - Dense table layout, not cards. Reporters need 30 rows without scrolling.
+  - One accent color, spent only on provenance (source markers and document links),
+    so the eye learns that color means "primary document".
+  - Confidence rendered as plain text, never as a colored badge. A green pill reads
+    as an endorsement; this tool endorses nothing.
+  - Monospace only for identifiers a person compares character by character.
+  - No hero. Search box first, staleness line second, nothing above them.
+  - Nothing loads from a third-party CDN. Vendor duckdb-wasm into site/vendor/.
+    A reporter searching a sensitive name must not broadcast it to anyone.
+-->
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --ink-soft: #5c5c5c;
+    --rule: #d8d5cf;
+    --page: #fbfaf8;
+    --field: #ffffff;
+    /* The one accent. Provenance only: source markers, document links. */
+    --provenance: #1f5c4a;
+    --warn: #8a4b1f;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    padding: 2rem 1.5rem 4rem;
+    background: var(--page);
+    color: var(--ink);
+    font: 15px/1.45 "Iowan Old Style", "Charter", Georgia, serif;
+    max-width: 74rem;
+    margin-inline: auto;
+  }
+  h1 { font-size: 1.35rem; font-weight: 600; margin: 0 0 .25rem; letter-spacing: -.01em; }
+  .lede { color: var(--ink-soft); margin: 0 0 1.25rem; max-width: 46rem; }
+  .counts { color: var(--ink-soft); font-size: .875rem; margin: 0 0 1rem; }
+  .stale { color: var(--warn); font-size: .875rem; margin: 0 0 1rem; }
+
+  .search { display: flex; gap: .5rem; margin-bottom: 1.5rem; max-width: 46rem; }
+  .search input {
+    flex: 1; padding: .6rem .7rem; font: inherit;
+    border: 1px solid var(--rule); background: var(--field); border-radius: 2px;
+  }
+  .search input:focus-visible { outline: 2px solid var(--provenance); outline-offset: 1px; }
+  .search button {
+    padding: .6rem 1.1rem; font: inherit; cursor: pointer;
+    border: 1px solid var(--ink); background: var(--ink); color: var(--page);
+    border-radius: 2px;
+  }
+
+  .datasets { font-size: .875rem; color: var(--ink-soft); margin-bottom: 2rem; }
+  .datasets ul { list-style: none; padding: 0; margin: .35rem 0 0;
+                 display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; }
+
+  .group { margin-bottom: 1.75rem; }
+  .group h2 { font-size: 1rem; font-weight: 600; margin: 0 0 .4rem;
+              padding-bottom: .3rem; border-bottom: 1px solid var(--rule); }
+  .group .meta { font-weight: 400; color: var(--ink-soft); font-size: .875rem; }
+
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  th { text-align: left; font-weight: 600; color: var(--ink-soft);
+       font-size: .8rem; padding: .3rem .5rem .3rem 0; }
+  td { padding: .3rem .5rem .3rem 0; border-top: 1px solid var(--rule);
+       vertical-align: top; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem; }
+  a.doc { color: var(--provenance); text-decoration: underline; text-underline-offset: 2px; }
+  .why { color: var(--ink-soft); font-size: .82rem; }
+  .retrieved { color: var(--ink-soft); font-size: .78rem; }
+
+  .note { background: #f3f1ec; border-left: 3px solid var(--rule);
+          padding: .6rem .8rem; font-size: .875rem; color: var(--ink-soft);
+          margin: 1rem 0; max-width: 46rem; }
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--rule);
+           font-size: .82rem; color: var(--ink-soft); max-width: 52rem; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<h1>NE Connect</h1>
+<p class="lede">Nebraska public records, cross-searched. Every result links to the
+state's own document.</p>
+
+<p class="counts" id="counts">Loading index…</p>
+<p class="stale" id="stale" hidden></p>
+
+<div class="search">
+  <label class="visually-hidden" for="q" hidden>Search</label>
+  <input id="q" type="search" autofocus autocomplete="off"
+         placeholder="Search a person, company, or agency">
+  <button id="go" type="button">Search</button>
+</div>
+
+<div class="datasets">
+  In this index:
+  <ul id="datasets"><li>loading…</li></ul>
+</div>
+
+<div id="results"></div>
+
+<div class="note" id="itemization-note" hidden>
+  Campaign contribution totals include itemized contributions only. Nebraska does not
+  itemize contributions at or below $250 per calendar year, so an absence here does
+  not mean a person gave nothing.
+</div>
+
+<footer>
+  <p>Built by <a class="doc" href="https://diepjustin.github.io/">Justin Diep</a>.
+  Records published by the State of Nebraska and its agencies; contracts data under
+  <a class="doc" href="https://nebraskalegislature.gov/laws/statutes.php?statute=84-602.04">Neb. Rev. Stat. § 84-602.04</a>.
+  Documents are served by the state, not copied here.</p>
+  <p>This site sets no cookies, runs no analytics, and makes no third-party requests.
+  Searches happen in your browser.</p>
+  <p>Amounts are as recorded by the state. Matches between datasets are name matches;
+  each shows how it was made. Found a bad match? <a class="doc" href="#">Report it.</a></p>
+</footer>
+
+<script type="module">
+  // TODO(Phase 5): vendor duckdb-wasm into site/vendor/ and load parquet from
+  // ./data/. See docs/UI_SPEC.md.
+  //
+  // Sketch:
+  //   const db = await initDuckDB();                       // from site/vendor/
+  //   await db.registerFileURL('entities.parquet', './data/entities.parquet');
+  //   const rows = await conn.query(`
+  //     SELECT e.entity_id, e.display_name, a.source, a.role,
+  //            count(*) AS n, sum(a.amount_cents) AS total_cents
+  //     FROM entities e JOIN appearances a USING (entity_id)
+  //     WHERE e.search_blob ILIKE ?
+  //     GROUP BY 1,2,3,4 ORDER BY n DESC`);
+  //
+  // Rules that must survive implementation:
+  //   - every rendered row carries source_url + retrieved_at
+  //   - every cross-dataset match renders its score and reason text
+  //   - totals labeled itemized-only wherever contributions appear
+  //   - status.json drives #stale; never hide a stale or failed source
+
+  const statusEl = document.getElementById('counts');
+  const staleEl = document.getElementById('stale');
+  const dsEl = document.getElementById('datasets');
+
+  try {
+    const status = await fetch('./data/status.json').then(r => r.json());
+    const total = (status.sources ?? []).reduce((n, s) => n + (s.row_count ?? 0), 0);
+    statusEl.textContent =
+      `${total.toLocaleString()} records · ${(status.sources ?? []).length} datasets · built ${status.built_at ?? 'unknown'}`;
+    dsEl.innerHTML = (status.sources ?? [])
+      .map(s => `<li>${s.label ?? s.source}</li>`).join('') || '<li>none yet</li>';
+    const stale = (status.sources ?? []).filter(s => !s.ok);
+    if (stale.length) {
+      staleEl.hidden = false;
+      staleEl.textContent = stale
+        .map(s => `${s.label ?? s.source}: last updated ${s.last_good ?? 'never'}; source unreachable since ${s.failed_at}.`)
+        .join(' ');
+    }
+  } catch {
+    statusEl.textContent =
+      'Index not built yet. Run `make build`, then `make serve`.';
+    dsEl.innerHTML = '<li>none yet</li>';
+  }
+</script>
+</body>
+</html>

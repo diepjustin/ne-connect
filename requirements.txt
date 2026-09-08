@@ -2,3 +2,7 @@
 # normalization and exact-key joins only. Fuzzy matching (splink/dedupe) lands
 # in phase 1, once phase 0 has shown the join is worth the machinery.
 pytest>=7.0
+
+# Reads resolve/aliases.yml, the Nebraska alias table adopted from the project
+# handoff in new/. The alias data is the point; YAML is what it ships as.
+pyyaml>=6.0

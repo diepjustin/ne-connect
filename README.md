@@ -1,10 +1,13 @@
 # Nebraska Public Records Hub (`ne-connect`)
 
-**Status: phases 0–2 built.** 44 tests. Three sources in: contracts, campaign finance
-and lobbying. **529 canonical entities**, of which **13 appear in all three sources** —
-a state vendor who donates *and* lobbies — plus **1,893 pairs awaiting human review**,
-ordered by money at stake. `resolve/resolutions.csv` is the decision ledger and is
-currently **empty**; no human has ruled on anything yet.
+**Status: phases 0–2 built, reconciled to the handoff spec in `new/`.** 85 tests.
+Three sources in: contracts, campaign finance and lobbying. **779 canonical
+entities**, of which **37 appear in all three sources** — a state vendor who donates
+*and* lobbies — plus **2,138 pairs awaiting human review**, ordered by money at
+stake. `data/manual/resolutions.csv` is the decision ledger and is currently
+**empty**; no human has ruled on anything yet.
+
+Live at **https://diepjustin.github.io/ne-connect/**.
 
 Lobbying principal ids **short-circuit the matcher** (`resolve/authority.py`): records
 sharing a source-native id are one entity by construction, linked without scoring.
@@ -107,6 +110,52 @@ Tier 2 — friction:
 - Auditor findings, DHHS license discipline, roll-call votes.
 
 Tier 3 — later: 990s, USAspending, county parcels.
+
+## Reconciled with the handoff spec (2026-09-08)
+
+`new/` holds the project handoff — `CLAUDE.md`, `PROJECT_PLAN.md` and five design
+docs. This project was built before those were read, so it was reconciled to them
+rather than restarted. What changed:
+
+- **Adopted `new/resolve/normalize.py` and `aliases.yml`** in place of the local
+  normalizer. Theirs handles `d/b/a` splitting, `c/o` stripping, accent folding,
+  nickname tables and full person-name parsing, and its alias table is sourced and
+  far richer. Three rules were ported *into* it from real data it had never been
+  run against — see below.
+- **Adopted `data/manual/resolutions.csv`** with the column names in
+  `docs/ENTITY_RESOLUTION.md`, plus provenance columns `CLAUDE.md` requires for
+  anything a model touches.
+- **Fixed four interface rules the page was breaking**: primary-record links and
+  retrieval dates per row, visible match score and reason, the itemized-only
+  caveat beside every contributions total, and focus on the search field.
+- **Amended `CLAUDE.md` rule 4**, which contradicted `docs/ENTITY_RESOLUTION.md`:
+  one forbade merging without a human decision, the other allowed auto-accept at
+  >= 0.95. Resolved in favour of the score band; the amendment records why.
+
+Kept deliberately: `index.html` at the folder root rather than `site/` (this repo
+publishes folder roots, so `site/` would serve at `/ne-connect/site/`), and an
+inline JSON payload rather than parquet + DuckDB-WASM (797 KB does not need a
+query engine, and the spec's own rule against third-party runtime loads is easier
+to keep without one).
+
+### Three normalizer bugs the real data exposed
+
+The spec was written before anyone ran the normalizer over the state's 60,000
+vendor strings. All three fixes are in `resolve/normalize.py` with tests:
+
+- **The `c/o` pattern made the slash optional**, so the bare token `CO` — an
+  extremely common company suffix — matched and truncated everything after it.
+  That mangled 236 names and collapsed `AMERICAN FENCE CO OF LINCOLN`,
+  `AMERICAN FENCE CO OF KEARNEY` and `AMER FENCE CO OF SOUTH DAKOTA` onto one
+  key: three companies in three cities merged into one entity, which is the exact
+  false match `ENTITY_RESOLUTION.md` calls the worst possible failure.
+- **Trailing account numbers were not stripped**, so `10 MEN 14654` never matched
+  `10 MEN LLC`, and the attached number also blocked suffix stripping —
+  `CONSOLIDATED COMPANIES, INC. 24641` kept its `INC`.
+- **Leading account numbers** (`10084 CROUCH RECREATION`) affected 205 names.
+
+Adopting the normalizer folded 58 more name variants and removed 75 pairs from the
+review queue.
 
 ## Entity resolution
 

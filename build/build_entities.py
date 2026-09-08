@@ -46,16 +46,16 @@ DATA_DIR = ROOT / "data"
 # "CONSOLIDATED COMPANIES, INC. 24641" or "CATALYST PUBLIC AFFAIRS (68508)".
 # Three digits or more, so a name genuinely ending in a small number survives.
 _BOOKKEEPING_TAIL = re.compile(r"(\s[-–]?\s*\d{3,}\s*$)|(\(\s*\d{3,}\s*\)\s*$)")
-LEDGER_PATH = ROOT / "resolve" / "resolutions.csv"
+LEDGER_PATH = ROOT / "data" / "manual" / "resolutions.csv"
 
 
 def _keyed(parties):
     """raw name -> normalized key, dropping names that normalize to nothing."""
     keyed = {}
     for party in parties.values():
-        normalized = normalize_org(party.name)
-        if normalized:
-            keyed.setdefault(normalized.key, []).append(party)
+        key = normalize_org(party.name)
+        if key:
+            keyed.setdefault(key, []).append(party)
     return keyed
 
 
@@ -71,12 +71,12 @@ def _keyed_lobbying(principals, aliases):
     keyed = {}
     for source_id, party in principals.items():
         for alias in aliases.get(source_id, {party.name}) | {party.name}:
-            normalized = normalize_org(alias)
-            if not normalized:
+            key = normalize_org(alias)
+            if not key:
                 continue
             variant = copy.copy(party)
             variant.name = alias
-            keyed.setdefault(normalized.key, []).append(variant)
+            keyed.setdefault(key, []).append(variant)
     return keyed
 
 
@@ -178,6 +178,11 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
                             "records": party.record_count,
                             "amount": round(party.total_amount, 2),
                             "source_id": party.source_id,
+                            # UI_SPEC: every displayed fact links to its primary
+                            # record. Contracts and lobbying publish a per-record
+                            # URL; campaign finance has none for a contributor,
+                            # and the page says so rather than inventing one.
+                            "source_url": party.sample_url,
                         }
                     )
 

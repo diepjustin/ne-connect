@@ -41,6 +41,52 @@ SOURCE_PROJECTS = {
 }
 
 
+def retrieval_dates():
+    """When each source was last captured.
+
+    UI_SPEC: a row without a retrieval date is a bug, and staleness is displayed
+    rather than hidden. Read from each scraper's own metadata so the page cannot
+    claim a freshness nobody verified.
+    """
+    dates = {}
+    contracts_meta = ROOT.parent / "ne-contracts" / "data" / "scrape_meta.json"
+    if contracts_meta.exists():
+        stamps = [v[:10] for v in json.loads(contracts_meta.read_text()).values()]
+        dates["contracts"] = max(stamps) if stamps else ""
+
+    finance_meta = ROOT.parent / "ne-campaign-finance" / "data" / "scrape_meta.json"
+    if finance_meta.exists():
+        runs = json.loads(finance_meta.read_text())
+        stamps = [r["run_date"] for years in runs.values() for rs in years.values() for r in rs]
+        dates["campaign_finance"] = max(stamps) if stamps else ""
+
+    lobbying_meta = ROOT.parent / "ne-lobbying" / "data" / "scrape_progress.json"
+    if lobbying_meta.exists():
+        dates["lobbying"] = json.loads(lobbying_meta.read_text()).get("last_run", "")
+    return dates
+
+
+def match_reasons():
+    """normalized key -> the scored reason it joined, for the UI.
+
+    UI_SPEC: any match shown carries its score and the reason it matched. The
+    scorer already writes both; they were simply not being rendered.
+    """
+    reasons = {}
+    for row in read_csv(DATA_DIR / "match_candidates.csv"):
+        if row.get("decision") not in ("auto", "accepted"):
+            continue
+        for key in (row["left_key"], row["right_key"]):
+            current = reasons.get(key)
+            if current is None or float(row["score"]) > current["score"]:
+                reasons[key] = {
+                    "score": float(row["score"]),
+                    "reason": row.get("reason", ""),
+                    "kind": row.get("match_kind", ""),
+                }
+    return reasons
+
+
 def read_csv(path: Path):
     if not path.exists():
         return []
@@ -56,6 +102,8 @@ def build_entities():
         hard_id_keys.add(link["left_key"])
         hard_id_keys.add(link["right_key"])
 
+    reasons = match_reasons()
+
     grouped = defaultdict(list)
     for row in rows:
         grouped[row["entity_id"]].append(row)
@@ -69,7 +117,10 @@ def build_entities():
             totals[source]["records"] += int(member["records"] or 0)
             totals[source]["amount"] += float(member["amount"] or 0)
             # One row per distinct spelling, remembering where it was seen.
-            aliases.setdefault(member["alias"], set()).add(source)
+            aliases.setdefault(member["alias"], {"sources": set(), "url": ""})
+            aliases[member["alias"]]["sources"].add(source)
+            if member.get("source_url") and not aliases[member["alias"]]["url"]:
+                aliases[member["alias"]]["url"] = member["source_url"]
 
         entities.append(
             {
@@ -84,9 +135,17 @@ def build_entities():
                     for source, value in totals.items()
                 },
                 "aliases": [
-                    {"name": name, "sources": sorted(sources)}
-                    for name, sources in sorted(aliases.items())
+                    {"name": name, "sources": sorted(a["sources"]), "url": a["url"]}
+                    for name, a in sorted(aliases.items())
                 ],
+                "match": next(
+                    (
+                        reasons[m["normalized_key"]]
+                        for m in members
+                        if m["normalized_key"] in reasons
+                    ),
+                    None,
+                ),
                 # True when at least one alias was joined by a source-native id
                 # rather than by name similarity. Worth surfacing separately:
                 # it is a stronger kind of claim.
@@ -124,7 +183,7 @@ def lobbying_coverage():
     }
 
 
-def render(entities, summary, coverage) -> str:
+def render(entities, summary, coverage, retrieved) -> str:
     payload = json.dumps(entities, separators=(",", ":"))
     multi = sum(1 for e in entities if len(e["sources"]) > 1)
     all_three = sum(1 for e in entities if len(e["sources"]) == 3)
@@ -272,7 +331,7 @@ def render(entities, summary, coverage) -> str:
 </div>
 
 <div class="controls">
-  <input type="search" id="q" placeholder="Search an organization, or any of its name variants…" autocomplete="off">
+  <input type="search" id="q" placeholder="Search an organization, or any of its name variants…" autocomplete="off" autofocus>
   <select id="filter">
     <option value="">All entities</option>
     <option value="3">In all three record sets</option>
@@ -298,6 +357,8 @@ def render(entities, summary, coverage) -> str:
   with an unrelated local one. Rows marked <span class="badge b-hard">ID</span>
   were joined by a source's own identifier rather than by name similarity, which
   is a stronger claim than the rest.</p>
+  <p>No analytics, no tracking, no external fonts, and nothing loads from a third
+  party — searching a name here does not send it anywhere.</p>
   <p>Built {date.today().isoformat()} from <code>data/canonical_entities.csv</code>.
   Method, caveats and open work are in the
   <a href="https://github.com/diepjustin/diepjustin.github.io/tree/main/ne-connect">project README</a>.</p>
@@ -306,11 +367,17 @@ def render(entities, summary, coverage) -> str:
 <script>
 const ENTITIES = {payload};
 const LABELS = {json.dumps(SOURCE_LABELS)};
+const RETRIEVED = {json.dumps(retrieved)};
+const PROJECTS = {json.dumps({k: v[0] for k, v in SOURCE_PROJECTS.items()})};
 const ORDER = {json.dumps(list(SOURCE_LABELS))};
 
-const money = n => n >= 1000000
-  ? '$' + (n / 1000000).toFixed(1) + 'M'
-  : '$' + Math.round(n).toLocaleString();
+// Contract totals run past a billion -- Hawkins Construction alone is $1.28B
+// across 14 years -- and "$1282.2M" is not a number anyone reads.
+const money = n => n >= 1000000000
+  ? '$' + (n / 1000000000).toFixed(2) + 'B'
+  : n >= 1000000
+    ? '$' + (n / 1000000).toFixed(1) + 'M'
+    : '$' + Math.round(n).toLocaleString();
 
 const list = document.getElementById('list');
 const q = document.getElementById('q');
@@ -329,8 +396,11 @@ function figures(e) {{
     const value = s === 'lobbying'
       ? t.records.toLocaleString() + ' positions'
       : money(t.amount);
+    // UI_SPEC: if a total is itemized-only, the UI says so next to the total,
+    // every time -- not once in a footnote.
+    const note = s === 'campaign_finance' ? ' · itemized only' : '';
     return '<div class="fig">' + value + '<span>' + LABELS[s] + ' · ' +
-      t.records.toLocaleString() + ' records</span></div>';
+      t.records.toLocaleString() + ' records' + note + '</span></div>';
   }}).join('');
 }}
 
@@ -347,15 +417,45 @@ function render(rows) {{
     const badges = ORDER.filter(s => e.sources.includes(s)).map(s =>
       '<span class="badge b-' + s + '">' + LABELS[s] + '</span>').join('') +
       (e.hard_id ? '<span class="badge b-hard">ID</span>' : '');
-    const aliases = e.aliases.map(a =>
-      '<div class="alias"><b>' + esc(a.name) + '</b> — ' +
-      a.sources.map(s => LABELS[s]).join(', ') + '</div>').join('');
+    const aliases = e.aliases.map(a => {{
+      const label = '<b>' + esc(a.name) + '</b>';
+      // Link straight to the state's own record where the source publishes one.
+      const name = a.url
+        ? '<a href="' + esc(a.url) + '" rel="noopener">' + label + '</a>'
+        : label;
+      return '<div class="alias">' + name + ' — ' +
+        a.sources.map(s => LABELS[s]).join(', ') + '</div>';
+    }}).join('');
+
+    const prov = e.sources.map(s => {{
+      const when = RETRIEVED[s] ? 'retrieved ' + RETRIEVED[s] : 'retrieval date unknown';
+      return '<div class="alias">' + LABELS[s] + ' — <a href="' + PROJECTS[s] +
+        '" rel="noopener">source project</a>, ' + when + '</div>';
+    }}).join('');
+
+    // UI_SPEC: any match shown carries its score and the reason it matched.
+    let conf;
+    if (e.hard_id) {{
+      conf = '<div class="alias">Joined by an identifier the source itself ' +
+        'publishes — identity by construction, not name similarity.</div>';
+    }} else if (e.match) {{
+      conf = '<div class="alias">Score ' + e.match.score.toFixed(2) + ' — ' +
+        esc(e.match.reason) + '</div>' +
+        '<div class="alias">Machine-decided and unreviewed. No person has ' +
+        'confirmed this grouping.</div>';
+    }} else {{
+      conf = '<div class="alias">Single source; nothing was matched to it.</div>';
+    }}
+
     return '<div class="entity">' +
       '<div class="etop"><div class="ename">' + esc(e.name) + '</div>' +
       '<div class="badges">' + badges + '</div>' +
       '<div class="figs">' + figures(e) + '</div></div>' +
-      '<div class="detail"><h4>Name variants folded into this entity</h4>' +
-      aliases + '</div></div>';
+      '<div class="detail">' +
+      '<h4>Why these records are grouped</h4>' + conf +
+      '<h4>Name variants folded into this entity</h4>' + aliases +
+      '<h4>Where each figure comes from</h4>' + prov +
+      '</div></div>';
   }}).join('');
 }}
 
@@ -393,7 +493,7 @@ def main() -> int:
 
     summary_path = DATA_DIR / "entities_summary.json"
     summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
-    html = render(entities, summary, lobbying_coverage())
+    html = render(entities, summary, lobbying_coverage(), retrieval_dates())
     OUT_PATH.write_text(html, encoding="utf-8")
 
     print(f"  entities            {len(entities):>8,}")

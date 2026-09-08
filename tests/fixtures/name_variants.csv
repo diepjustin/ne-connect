@@ -1,0 +1,13 @@
+name_a,name_b,expect,note
+Ameritas Life Insurance Corp.,AMERITAS LIFE INS,same,suffix + abbreviation
+Kiewit Corporation,KIEWIT CORP,same,legal suffix only
+Olsson Associates,Olsson Assoc,same,Assoc expands to Associates
+Nebraska Bankers Association,Nebraska Bankers Assn,same,Assn is a legal suffix
+NDOR,Nebraska Department of Transportation,same,2017 agency rename
+NDEQ,Nebraska Department of Environment and Energy,same,2019 agency rename
+UNL,University of Nebraska-Lincoln,same,campus alias
+UNL,University of Nebraska,different,campus is not the system
+UNMC,Nebraska Medicine,different,public university vs private health system
+Sandhills Holdings II,Sandhills Holdings III,different,generational numbering
+Johnson Construction,Johnson Construction of Omaha,different,needs corroboration to merge
+First National Bank,First National Insurance,different,shared prefix only

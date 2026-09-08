@@ -30,13 +30,17 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+# Column names follow docs/ENTITY_RESOLUTION.md so the file is the one that
+# spec describes. pair_id, suggested_by and suggested_score are additions, not
+# departures: CLAUDE.md requires that anything a model touched stay traceable,
+# and keeping the suggestion beside the human decision is how that is done.
 LEDGER_COLUMNS = [
     "pair_id",
-    "left_key",
-    "right_key",
+    "name_key_a",
+    "name_key_b",
     "decision",
     "decided_by",
-    "decided_on",
+    "decided_at",
     "suggested_by",
     "suggested_score",
     "note",
@@ -78,9 +82,17 @@ class Resolution:
         return pair_id(self.left_key, self.right_key)
 
     def as_row(self) -> dict:
-        row = {c: getattr(self, c, "") for c in LEDGER_COLUMNS}
-        row["pair_id"] = self.pair_id
-        return row
+        return {
+            "pair_id": self.pair_id,
+            "name_key_a": self.left_key,
+            "name_key_b": self.right_key,
+            "decision": self.decision,
+            "decided_by": self.decided_by,
+            "decided_at": self.decided_on,
+            "suggested_by": self.suggested_by,
+            "suggested_score": self.suggested_score,
+            "note": self.note,
+        }
 
 
 class Ledger:
@@ -123,11 +135,11 @@ class Ledger:
             rows = list(csv.DictReader(fh))
         return cls(
             Resolution(
-                left_key=r["left_key"],
-                right_key=r["right_key"],
+                left_key=r["name_key_a"],
+                right_key=r["name_key_b"],
                 decision=r["decision"],
                 decided_by=r["decided_by"],
-                decided_on=r.get("decided_on", ""),
+                decided_on=r.get("decided_at", ""),
                 suggested_by=r.get("suggested_by", ""),
                 suggested_score=r.get("suggested_score", ""),
                 note=r.get("note", ""),

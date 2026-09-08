@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT / "resolve"))
 
 from resolutions import DIFFERENT, SAME, Ledger, Resolution  # noqa: E402
 
-LEDGER_PATH = ROOT / "resolve" / "resolutions.csv"
+LEDGER_PATH = ROOT / "data" / "manual" / "resolutions.csv"
 
 # Anything that looks like a model name is rejected as a decision owner. The
 # ledger's whole value is that a person stands behind each row.

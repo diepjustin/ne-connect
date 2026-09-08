@@ -1,0 +1,147 @@
+# Nebraska-specific name aliases.
+#
+# Local knowledge that no general normalizer can infer. Each canonical entry maps
+# variant spellings to one key. Add a `source` note explaining why an alias is
+# here — future contributors need to be able to check the reasoning, and this file
+# is worth publishing on its own for other Nebraska newsrooms.
+#
+# Aliases are compared after basic normalization (uppercase, punctuation stripped,
+# legal suffixes removed), so write them the way they appear in filings.
+
+organizations:
+  "Nebraska Public Power District":
+    aliases: ["NPPD", "Nebraska Public Power Dist", "Neb Public Power District"]
+    source: "Statewide public power utility; appears both ways in contracts."
+
+  "Omaha Public Power District":
+    aliases: ["OPPD", "Omaha Public Power Dist"]
+    source: "Douglas County public utility."
+
+  "Lincoln Electric System":
+    aliases: ["LES", "Lincoln Electric Sys"]
+    source: "City of Lincoln utility."
+
+  "Metropolitan Utilities District":
+    aliases: ["MUD", "Metro Utilities District", "Metropolitan Utilities Dist"]
+    source: "Omaha gas and water utility."
+
+  "Board of Regents of the University of Nebraska":
+    aliases:
+      - "University of Nebraska"
+      - "Univ of Nebraska"
+      - "NU"
+      - "University of Nebraska System"
+      - "Board of Regents"
+    source: >
+      The Regents are the contracting party for all NU campuses. Campus-level
+      names below are kept separate on purpose — a reporter usually wants to know
+      which campus, so do NOT collapse UNL into this entry. Use the connections
+      panel to relate them instead.
+
+  "University of Nebraska-Lincoln":
+    aliases: ["UNL", "Univ of Nebraska Lincoln", "University of Nebraska Lincoln", "UN-L"]
+    source: "Lincoln campus."
+
+  "University of Nebraska at Omaha":
+    aliases: ["UNO", "Univ of Nebraska Omaha", "University of Nebraska Omaha"]
+    source: "Omaha campus."
+
+  "University of Nebraska Medical Center":
+    aliases: ["UNMC", "Nebraska Medical Center", "Univ of Nebraska Medical Center"]
+    source: >
+      Careful: "Nebraska Medicine" is the affiliated private health system and is
+      a DIFFERENT entity. Do not add it here.
+
+  "University of Nebraska at Kearney":
+    aliases: ["UNK", "Univ of Nebraska Kearney"]
+    source: "Kearney campus."
+
+  "Nebraska College of Technical Agriculture":
+    aliases: ["NCTA"]
+    source: "Curtis campus, under NU."
+
+  "Nebraska State College System":
+    aliases: ["NSCS", "State College System"]
+    source: "Chadron, Peru, and Wayne State — separate from the NU system."
+
+  "Nebraska Department of Health and Human Services":
+    aliases: ["DHHS", "HHS", "Dept of Health and Human Services", "Nebraska DHHS"]
+    source: "Largest state agency by contract volume."
+
+  "Nebraska Department of Transportation":
+    aliases:
+      - "NDOT"
+      - "NDOR"
+      - "Nebraska Department of Roads"
+      - "Dept of Roads"
+    source: >
+      Renamed from Department of Roads to Department of Transportation in 2017.
+      Pre-2017 records use NDOR. Same agency; merge.
+
+  "Nebraska Department of Environment and Energy":
+    aliases:
+      - "NDEE"
+      - "NDEQ"
+      - "Nebraska Department of Environmental Quality"
+    source: "Renamed from Environmental Quality in 2019. Same agency; merge."
+
+  "Nebraska Department of Administrative Services":
+    aliases: ["DAS", "Administrative Services"]
+    source: "Publishes the contracts database and the salary roster."
+
+  "Nebraska Department of Correctional Services":
+    aliases: ["NDCS", "Dept of Correctional Services", "Corrections"]
+    source: ""
+
+  "Nebraska Department of Economic Development":
+    aliases: ["DED", "Economic Development"]
+    source: ""
+
+  "Nebraska Department of Education":
+    aliases: ["NDE", "Dept of Education"]
+    source: "Distinct from individual school districts."
+
+  "Nebraska Department of Motor Vehicles":
+    aliases: ["DMV", "Dept of Motor Vehicles"]
+    source: ""
+
+  "Nebraska Department of Labor":
+    aliases: ["NDOL", "Dept of Labor"]
+    source: ""
+
+  "Nebraska Game and Parks Commission":
+    aliases: ["Game and Parks", "NGPC"]
+    source: ""
+
+  "Nebraska State Patrol":
+    aliases: ["NSP", "State Patrol"]
+    source: ""
+
+  "Nebraska Accountability and Disclosure Commission":
+    aliases: ["NADC"]
+    source: "Publishes campaign finance and C-1 filings."
+
+  "Nebraska Investment Council":
+    aliases: ["NIC"]
+    source: ""
+
+  "Nebraska Public Employees Retirement Systems":
+    aliases: ["NPERS"]
+    source: ""
+
+# Natural resources districts. All 23 — reporters search them by short name.
+  "Lower Platte South Natural Resources District":
+    aliases: ["LPSNRD", "Lower Platte South NRD"]
+    source: "NRD naming is inconsistent across filings."
+  "Papio-Missouri River Natural Resources District":
+    aliases: ["Papio NRD", "Papio Missouri River NRD", "P-MRNRD"]
+    source: ""
+  "Central Platte Natural Resources District":
+    aliases: ["Central Platte NRD", "CPNRD"]
+    source: ""
+  # TODO: complete the remaining NRDs before Phase 4.
+
+people:
+  # Person aliases are riskier than org aliases and need a documented reason each.
+  # Format: canonical "LAST|FIRST" key -> variants seen in filings.
+  # Leave empty until Phase 7; see docs/PRIVACY.md.

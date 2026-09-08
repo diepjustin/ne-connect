@@ -64,15 +64,15 @@ def build(min_amount: float = 0.0, out_dir: Path = None) -> dict:
 
     by_key_vendors = defaultdict(list)
     for party in vendors.values():
-        normalized = normalize_org(party.name)
-        if normalized:
-            by_key_vendors[normalized.key].append((party, normalized))
+        key = normalize_org(party.name)
+        if key:
+            by_key_vendors[key].append((party, key))
 
     by_key_contributors = defaultdict(list)
     for party in contributors.values():
-        normalized = normalize_org(party.name)
-        if normalized:
-            by_key_contributors[normalized.key].append((party, normalized))
+        key = normalize_org(party.name)
+        if key:
+            by_key_contributors[key].append((party, key))
 
     matches = []
     for key in set(by_key_vendors) & set(by_key_contributors):
@@ -84,7 +84,12 @@ def build(min_amount: float = 0.0, out_dir: Path = None) -> dict:
         if contract_total < min_amount:
             continue
 
-        rules = sorted({r for _, n in vendor_parties + contributor_parties for r in n.rules})
+        # Show your work: the raw strings and the key they collapsed to. The
+        # adopted normalizer does not emit a rule list, and the before/after
+        # pair is the more checkable artifact anyway.
+        rules = "; ".join(
+            f"{p.name!r} -> {k}" for p, k in vendor_parties + contributor_parties
+        )
         agencies = sorted({a for p, _ in vendor_parties for a in p.counterparties})
         recipients = sorted({c for p, _ in contributor_parties for c in p.counterparties})
 
@@ -106,7 +111,7 @@ def build(min_amount: float = 0.0, out_dir: Path = None) -> dict:
                 "agencies_sample": " | ".join(agencies[:5]),
                 "recipients": len(recipients),
                 "recipients_sample": " | ".join(recipients[:5]),
-                "normalization_applied": "; ".join(rules),
+                "normalization_applied": rules,
                 "contract_url": next((p.sample_url for p, _ in vendor_parties if p.sample_url), ""),
             }
         )
