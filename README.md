@@ -98,7 +98,7 @@ Tier 1 — bulk-downloadable, build v1 on these:
 | State contracts | **done** (`ne-contracts`) | 739,605 records, 92 entities |
 | NADC campaign finance 2022+ | **done** (`ne-campaign-finance`) | 207,259 rows, 5 tables |
 | NADC campaign finance pre-2022 | not started | state zip + OWH parser; different schema and IDs |
-| Lobbyist registration & activity | **bill positions done** | `../ne-lobbying/` — Support/Oppose/Neutral per lobbyist × principal × bill, with stable ids. The only source tying a private interest to a specific bill |
+| Lobbyist registration & activity | **positions done; expenses wired, sweep queued** | `../ne-lobbying/` — Support/Oppose/Neutral per lobbyist × principal × bill, with stable ids. The only source tying a private interest to a specific bill |
 | State salary roster | not started | DAS, annual |
 | NADC C-1 financial disclosures | not started | businesses, income sources, creditors — genuinely under-read |
 

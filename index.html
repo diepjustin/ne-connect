@@ -147,7 +147,14 @@
   rows carry no dollar value at all, so an organization showing no contract total
   may still hold contracts. Contributions cover 2022–2026 only, the years
   Nebraska's current e-filing system spans, while contract records reach back
-  further: the two halves of a row describe different periods. Lobbying coverage is <strong>partial</strong>: 853 bills swept (LB only, session 109). Completing the sweep would add entities and connections, not remove them.</p>
+  further: the two halves of a row describe different periods. Lobbying coverage is <strong>partial</strong>: 1,100 bills swept (LB only, session 109). Completing the sweep would add entities and connections, not remove them.</p>
+  <p>Lobbying figures, where a dollar amount is shown, are a principal's own
+  reported total from Form C &mdash; compensation, reimbursement, entertainment,
+  lodging, travel, gifts and admissions &mdash; not audited spending. Form B,
+  what a lobbyist reported receiving for the same work, is deliberately excluded:
+  adding the two counts the same money twice. An entity showing positions but no
+  amount has not had its expense reports collected yet, which is not the same as
+  having spent nothing.</p>
   <p>Sharing a normalized name does not make two records the same organization.
   Subsidiaries are not resolved to parents, and a national firm can share a name
   with an unrelated local one. Rows marked <span class="badge b-hard">ID</span>
@@ -192,13 +199,22 @@ function esc(s) {
 function figures(e) {
   return ORDER.filter(s => e.totals[s]).map(s => {
     const t = e.totals[s];
-    // Lobbying carries no dollar figure -- it is registered positions on bills.
+    // Lobbying is counted in registered positions, and carries a dollar figure
+    // only where the principal's Form C has been collected. An entity with no
+    // figure has not been swept yet -- which is not the same as having spent
+    // nothing, so it shows positions alone rather than $0.
     const value = s === 'lobbying'
-      ? t.records.toLocaleString() + ' positions'
+      ? (t.amount ? money(t.amount) : t.records.toLocaleString() + ' positions')
       : money(t.amount);
     // UI_SPEC: if a total is itemized-only, the UI says so next to the total,
     // every time -- not once in a footnote.
-    const note = s === 'campaign_finance' ? ' · itemized only' : '';
+    let note = '';
+    if (s === 'campaign_finance') note = ' · itemized only';
+    if (s === 'lobbying' && t.amount) {
+      note = ' · ' + t.records.toLocaleString() + ' positions · self-reported';
+      return '<div class="fig">' + value + '<span>' + LABELS[s] + note +
+        '</span></div>';
+    }
     return '<div class="fig">' + value + '<span>' + LABELS[s] + ' · ' +
       t.records.toLocaleString() + ' records' + note + '</span></div>';
   }).join('');

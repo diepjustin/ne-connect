@@ -146,6 +146,42 @@ def structured_contributor_names(data_dir: Path = None):
     return names
 
 
+def load_lobbying_expenses(data_dir: Path = None):
+    """principal_id -> reported lobbying spending, from Form C.
+
+    Form C line 11 is a principal's total: lobbyist compensation and
+    reimbursement plus entertainment, lodging, travel, gifts and admissions. It
+    is the fuller answer to "what did this organization spend on lobbying" than
+    compensation alone.
+
+    Form B is deliberately NOT read here. It reports what a LOBBYIST received
+    for the same work, so adding the two would count the same money twice --
+    the hub's lobbying entities are principals, and Form C is their side of it.
+
+    Returns {} when the sweep has not run, which is the normal early state; the
+    hub then shows positions without dollars rather than showing zeroes.
+    """
+    data_dir = Path(data_dir or LOBBYING_DATA)
+    path = data_dir / "expenses_principal.csv"
+    totals = {}
+    if not path.exists():
+        return totals
+
+    with path.open(encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh):
+            # "11. Total (Sum of 2, 3d, 4, 5, 6, 7, 8, 9d, and 10d)"
+            if not row.get("category", "").strip().startswith("11."):
+                continue
+            entity_id = (row.get("entity_id") or "").strip()
+            if not entity_id:
+                continue
+            try:
+                totals[entity_id] = totals.get(entity_id, 0.0) + float(row["amount"])
+            except (KeyError, ValueError):
+                continue
+    return totals
+
+
 def load_lobbying_principals(data_dir: Path = None):
     """Lobbying principals, keyed by the name we can best stand behind.
 
@@ -168,6 +204,8 @@ def load_lobbying_principals(data_dir: Path = None):
             for row in csv.DictReader(fh):
                 if row.get("name"):
                     names[row["id"]] = row
+
+    expenses = load_lobbying_expenses(data_dir)
 
     principals = {}
     if not positions_path.exists():
@@ -201,6 +239,9 @@ def load_lobbying_principals(data_dir: Path = None):
                     "https://nebraskalegislature.gov/lobbyist/"
                     f"view.php?link=view_principal&id={source_id}"
                 )
+                # Spending is per principal, not per position row, so it is set
+                # once when the party is created rather than accumulated.
+                party.total_amount = expenses.get(source_id, 0.0)
             party.record_count += 1
             lobbyist = (row.get("lobbyist") or "").strip()
             if lobbyist:
