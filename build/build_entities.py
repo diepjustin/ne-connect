@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -40,6 +41,11 @@ from sources import (  # noqa: E402
 )
 
 DATA_DIR = ROOT / "data"
+
+# A trailing account number or bare zip on a contract vendor string: the tail of
+# "CONSOLIDATED COMPANIES, INC. 24641" or "CATALYST PUBLIC AFFAIRS (68508)".
+# Three digits or more, so a name genuinely ending in a small number survives.
+_BOOKKEEPING_TAIL = re.compile(r"(\s[-–]?\s*\d{3,}\s*$)|(\(\s*\d{3,}\s*\)\s*$)")
 LEDGER_PATH = ROOT / "resolve" / "resolutions.csv"
 
 
@@ -218,6 +224,13 @@ def _canonical_name(members, *keyed_sources) -> str:
     for a lobbying entity is usually the TRUNCATED spelling ("ASSOCIATED
     BEVERAGE DISTRIBUTORS OF"). Prefer the longest alias the site did not cut
     short, so an entity is labelled with a name a reader can actually read.
+
+    "Longest" alone is not enough. Contract vendor strings often carry a
+    trailing account number or bare zip -- "CONSOLIDATED COMPANIES, INC. 24641",
+    "CATALYST PUBLIC AFFAIRS (68508)" -- and those are the LONGEST spellings, so
+    a naive pick puts an internal reference number into the published name of 42
+    entities. Bookkeeping noise is filtered out first, and only used if an entity
+    has no cleaner spelling at all.
     """
     aliases = [
         party.name
@@ -228,7 +241,8 @@ def _canonical_name(members, *keyed_sources) -> str:
     if not aliases:
         return max(members, key=len).title()
     complete = [a for a in aliases if not a.rstrip().endswith("...")]
-    return max(complete or aliases, key=len)
+    tidy = [a for a in (complete or aliases) if not _BOOKKEEPING_TAIL.search(a)]
+    return max(tidy or complete or aliases, key=len)
 
 
 def _dominant_type(parties) -> str:

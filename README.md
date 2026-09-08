@@ -174,11 +174,29 @@ suggestion kept alongside it. Otherwise the provenance of the merge is lost.
 ne-connect/
   README.md              # source of truth
   ingest/                # one thin adapter per source -> a common table shape
-  resolve/               # normalize.py, block.py, match.py, resolutions.csv
-  build/                 # connections precompute, search index, site build
-  data/                  # gitignored; built in CI
-  index.html             # the published page
+  resolve/               # normalize.py, index.py, match.py, authority.py, resolutions.csv
+  build/                 # build_entities.py, build_site.py, review.py, report.py
+  data/                  # gitignored; rebuilt from the sibling projects
+  index.html             # the published page (committed)
 ```
+
+### Running it
+
+```
+./venv/bin/python -m pytest tests/          # no network
+./venv/bin/python build/build_entities.py   # -> data/canonical_entities.csv  (~90s)
+./venv/bin/python build/build_site.py       # -> index.html                   (~1s)
+```
+
+`build_site.py` embeds the whole entity table inline — 529 entities and their aliases
+come to about 230 KB, against `ne-contracts`' 6.85 MB page, because this project
+publishes *entities* rather than the millions of transactions behind them. Small enough
+that `index.html` is committed directly and needs no chunked payload or CI artifact.
+
+The page prints the pending-review and human-decision counts beside the entity count
+rather than in a footnote. Every figure on it comes from a machine match that **no
+person has confirmed**, and a page showing only the entity count would read as a
+finished finding rather than a lead list.
 
 **Scrapers stay in their own projects.** `ne-contracts` and `ne-campaign-finance` keep
 their own repos, READMEs and caveats, and each publishes clean tables. `ne-connect`
