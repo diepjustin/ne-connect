@@ -233,3 +233,12 @@ def test_real_c_o_is_still_stripped():
 def test_suffix_stripping_never_empties_a_key():
     # "CO INC" is all suffix; an empty key would match every other empty key.
     assert normalize_org("CO INC") == "CO"
+
+
+def test_decimal_contract_reference_is_stripped():
+    """The state appends decimal references as well as plain account numbers."""
+    assert normalize_org("KIEWIT BUILDING GROUP, INC. 4.12788") == normalize_org(
+        "KIEWIT BUILDING GROUP INC"
+    )
+    # A short decimal is not a reference and survives (punctuation still folds).
+    assert normalize_org("VERSION 1.5") == "VERSION 1 5"

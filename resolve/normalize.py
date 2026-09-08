@@ -120,7 +120,10 @@ NICKNAMES = {
 
 _PUNCT_KEEP_AMP = re.compile(r"[^\w&\s]", re.UNICODE)
 _WS = re.compile(r"\s+")
-_TRAILING_REF = re.compile(r"\s+\d{3,}$")
+# A trailing account number, or a decimal contract reference: the state
+# publishes both, and "KIEWIT BUILDING GROUP, INC. 4.12788" stayed a separate
+# entity from "KIEWIT BUILDING GROUP INC" until the decimal form was covered.
+_TRAILING_REF = re.compile(r"\s+(\d{3,}|\d+\.\d{3,})$")
 # Same bookkeeping noise at the front: 205 vendor strings look like
 # "10084 CROUCH RECREATION". Leading refs cost matches rather than inventing
 # them, but they are just as removable.
@@ -164,8 +167,19 @@ def _core_org(name: str) -> str:
     s = _strip_accents(name).upper()
     s = _CO_ATTN.sub(" ", s)
     s = s.replace("&", " AND ")
+
+    # Before punctuation folding, while a decimal reference is still one token:
+    # fold "4.12788" first and it becomes "4 12788", of which only the tail
+    # looks like a reference, leaving a stray "4" that then blocks the legal
+    # suffix strip below.
+    s = _LEADING_REF.sub("", s)
+    s = _TRAILING_REF.sub("", s.rstrip())
+
     s = _PUNCT_KEEP_AMP.sub(" ", s)
     s = _WS.sub(" ", s).strip()
+    # Again, now that punctuation is gone: "SMITH CO. #14654" only exposes its
+    # reference once the "#" has been folded away.
+    s = _TRAILING_REF.sub("", s).strip()
 
     # Strip a trailing account/reference number BEFORE suffix handling. The
     # state's contract vendor strings carry them -- one roofing company appears
@@ -174,9 +188,6 @@ def _core_org(name: str) -> str:
     # "CONSOLIDATED COMPANIES, INC. 24641" would keep its INC as well.
     # Three digits or more, so a name genuinely ending in a small number
     # ("PHASE 2", "PIER 1") survives.
-    s = _LEADING_REF.sub("", s)
-    s = _TRAILING_REF.sub("", s).strip()
-
     tokens = [ABBREVIATIONS.get(t, t) for t in s.split()]
     # Strip legal suffixes from the tail only; "CORPORATION FOR PUBLIC
     # BROADCASTING" must keep its leading CORPORATION.

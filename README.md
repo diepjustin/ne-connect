@@ -1,6 +1,7 @@
 # Nebraska Public Records Hub (`ne-connect`)
 
-**Status: phases 0–2 built, reconciled to the handoff spec in `new/`.** 85 tests.
+**Status: phases 0–2 built, reconciled to the handoff spec in `new/`, and the
+index now covers every entity rather than only the matched ones.** 86 tests.
 Three sources in: contracts, campaign finance and lobbying. **779 canonical
 entities**, of which **37 appear in all three sources** — a state vendor who donates
 *and* lobbies — plus **2,138 pairs awaiting human review**, ordered by money at
@@ -233,9 +234,30 @@ ne-connect/
 
 ```
 ./venv/bin/python -m pytest tests/          # no network
-./venv/bin/python build/build_entities.py   # -> data/canonical_entities.csv  (~90s)
-./venv/bin/python build/build_site.py       # -> index.html                   (~1s)
+./venv/bin/python build/build_entities.py   # -> data/canonical_entities.csv  (~105s)
+./venv/bin/python build/build_site.py       # -> index.html + d/entities.json (~2s)
 ```
+
+### Why the payload is split the way it is
+
+`build_entities.py` emits **every** entity, not only the ones that matched across
+sources. Before that it emitted 779 of 80,066 names, so the hub was a connections
+list rather than a search: look up a state vendor that never donated and it
+returned nothing, though `ne-contracts` holds all of its records.
+
+The page therefore ships in two pieces:
+
+- `index.html` inlines the ~850 entities that appear in more than one record set.
+  They are the point of the hub and they open instantly.
+- `d/entities.json` holds all 78,968, fetched the first time someone searches.
+
+That file is committed rather than built in CI, because ne-connect derives from
+three sibling projects whose data is not in git — CI has nothing to rebuild it
+from. It is one file, so a rebuild produces one delta rather than thousands.
+
+Chunking it further was considered and measured away: 2.97 MB raw is 0.86 MB over
+the wire once Pages gzips it, about what the page already weighed, and a
+three-character prefix scheme would have produced 5,331 files to save nothing.
 
 `build_site.py` embeds the whole entity table inline — 529 entities and their aliases
 come to about 230 KB, against `ne-contracts`' 6.85 MB page, because this project

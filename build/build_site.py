@@ -26,6 +26,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 OUT_PATH = ROOT / "index.html"
+# The full index ships as its own file so the page opens instantly on the
+# cross-source entities and only pays for the other 78,000 when someone
+# searches. Measured rather than guessed: 2.97 MB raw, 0.86 MB over the wire
+# once GitHub Pages gzips it -- about what the page already weighed, which is
+# why this is one lazily-fetched file and not the 5,331 prefix buckets a
+# three-character chunking scheme would have produced.
+INDEX_DIR = ROOT / "d"
+INDEX_PATH = INDEX_DIR / "entities.json"
+
+SOURCE_BITS = {"contracts": 1, "campaign_finance": 2, "lobbying": 4}
 
 SOURCE_LABELS = {
     "contracts": "Contracts",
@@ -110,6 +120,10 @@ def build_entities():
 
     entities = []
     for entity_id, members in grouped.items():
+        # Single-source entities travel in the lazily-fetched index instead;
+        # inlining all 79,021 would put 3 MB in front of every page load.
+        if len({m["source"] for m in members}) < 2:
+            continue
         totals = defaultdict(lambda: {"records": 0, "amount": 0.0})
         aliases = {}
         for member in members:
@@ -164,6 +178,42 @@ def build_entities():
     return entities
 
 
+def build_full_index(rows):
+    """Every entity in one compact array, for search across all of them.
+
+    Positional arrays, not objects: at 79,021 entities the key names would cost
+    more than the values. Order is [name, sourceBits, contractAmount,
+    contractRecords, contributionAmount, contributionRecords, lobbyingRecords].
+
+    Aliases are deliberately omitted here. They matter for entities assembled
+    from several spellings, and those all travel inline in the page; for a
+    single-source entity the alias IS the name.
+    """
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[row["entity_id"]].append(row)
+
+    index = []
+    for members in grouped.values():
+        bits = 0
+        totals = defaultdict(lambda: [0, 0.0])
+        for member in members:
+            bits |= SOURCE_BITS[member["source"]]
+            totals[member["source"]][0] += int(member["records"] or 0)
+            totals[member["source"]][1] += float(member["amount"] or 0)
+        contracts = totals["contracts"]
+        finance = totals["campaign_finance"]
+        lobbying = totals["lobbying"]
+        index.append([
+            members[0]["canonical_name"], bits,
+            round(contracts[1]), contracts[0],
+            round(finance[1]), finance[0],
+            lobbying[0],
+        ])
+    index.sort(key=lambda e: (-bin(e[1]).count("1"), -e[2], e[0]))
+    return index
+
+
 def lobbying_coverage():
     """What the lobbying sweep actually covered, so the page can say so.
 
@@ -183,7 +233,7 @@ def lobbying_coverage():
     }
 
 
-def render(entities, summary, coverage, retrieved) -> str:
+def render(entities, summary, coverage, retrieved, total_indexed) -> str:
     payload = json.dumps(entities, separators=(",", ":"))
     multi = sum(1 for e in entities if len(e["sources"]) > 1)
     all_three = sum(1 for e in entities if len(e["sources"]) == 3)
@@ -365,7 +415,11 @@ def render(entities, summary, coverage, retrieved) -> str:
 </footer>
 
 <script>
-const ENTITIES = {payload};
+const ENTITIES = {payload};          // cross-source, inline, shown by default
+const TOTAL_INDEXED = {total_indexed};
+const BITS = {{contracts: 1, campaign_finance: 2, lobbying: 4}};
+let ALL = null;                      // the other ~78,000, fetched on first search
+let loading = false;
 const LABELS = {json.dumps(SOURCE_LABELS)};
 const RETRIEVED = {json.dumps(retrieved)};
 const PROJECTS = {json.dumps({k: v[0] for k, v in SOURCE_PROJECTS.items()})};
@@ -404,9 +458,13 @@ function figures(e) {{
   }}).join('');
 }}
 
-function render(rows) {{
-  count.textContent = rows.length.toLocaleString() + ' of ' +
-    ENTITIES.length.toLocaleString() + ' entities';
+function render(rows, pool) {{
+  const scope = (pool || ENTITIES) === ENTITIES
+    ? ENTITIES.length.toLocaleString() + ' cross-source entities'
+    : TOTAL_INDEXED.toLocaleString() + ' entities';
+  count.textContent = rows.length === 400
+    ? 'first 400 matches in ' + scope
+    : rows.length.toLocaleString() + ' of ' + scope;
   if (!rows.length) {{
     list.innerHTML = '<p class="hint">No entity matches that search.</p>';
     return;
@@ -459,17 +517,50 @@ function render(rows) {{
   }}).join('');
 }}
 
+// The lazily-fetched records are positional arrays; widen them to the same
+// shape the inline entities use so one render path serves both.
+function widen(a) {{
+  const sources = [];
+  if (a[1] & BITS.contracts) sources.push('contracts');
+  if (a[1] & BITS.campaign_finance) sources.push('campaign_finance');
+  if (a[1] & BITS.lobbying) sources.push('lobbying');
+  const totals = {{}};
+  if (a[1] & BITS.contracts) totals.contracts = {{records: a[3], amount: a[2]}};
+  if (a[1] & BITS.campaign_finance) totals.campaign_finance = {{records: a[5], amount: a[4]}};
+  if (a[1] & BITS.lobbying) totals.lobbying = {{records: a[6]}};
+  return {{name: a[0], sources, totals, aliases: [], match: null, hard_id: false, lite: true}};
+}}
+
+async function ensureIndex() {{
+  if (ALL || loading) return;
+  loading = true;
+  count.textContent = 'loading the full index…';
+  try {{
+    const res = await fetch('d/entities.json');
+    ALL = (await res.json()).map(widen);
+  }} catch (err) {{
+    ALL = [];
+    count.textContent = 'could not load the full index';
+  }}
+  loading = false;
+  apply();
+}}
+
 function apply() {{
   const term = q.value.trim().toLowerCase();
   const f = filter.value;
-  render(ENTITIES.filter(e => {{
+  // No search term: show the cross-source entities, which are the point of the
+  // hub and are already here. A search reaches every entity in every source.
+  if (term && !ALL) {{ ensureIndex(); }}
+  const pool = term && ALL ? ALL : ENTITIES;
+  render(pool.filter(e => {{
     if (f === '3' && e.sources.length < 3) return false;
     if (f === '2' && e.sources.length < 2) return false;
     if (f && f !== '2' && f !== '3' && !e.sources.includes(f)) return false;
     if (!term) return true;
     if (e.name.toLowerCase().includes(term)) return true;
     return e.aliases.some(a => a.name.toLowerCase().includes(term));
-  }}));
+  }}).slice(0, 400), pool);
 }}
 
 list.addEventListener('click', ev => {{
@@ -491,13 +582,18 @@ def main() -> int:
         print("no canonical entities on disk -- run build/build_entities.py first")
         return 1
 
+    full = build_full_index(read_csv(DATA_DIR / "canonical_entities.csv"))
+    INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    INDEX_PATH.write_text(json.dumps(full, separators=(",", ":")), encoding="utf-8")
+
     summary_path = DATA_DIR / "entities_summary.json"
     summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
-    html = render(entities, summary, lobbying_coverage(), retrieval_dates())
+    html = render(entities, summary, lobbying_coverage(), retrieval_dates(), len(full))
     OUT_PATH.write_text(html, encoding="utf-8")
 
-    print(f"  entities            {len(entities):>8,}")
-    print(f"  in 2+ record sets   {sum(1 for e in entities if len(e['sources']) > 1):>8,}")
+    print(f"  searchable entities {len(full):>8,}  -> d/{INDEX_PATH.name}"
+          f" ({INDEX_PATH.stat().st_size / 1024 / 1024:.2f} MB)")
+    print(f"  inline, cross-source{len(entities):>8,}")
     print(f"  in all three        {sum(1 for e in entities if len(e['sources']) == 3):>8,}")
     print(f"  page size           {len(html.encode('utf-8')) / 1024:>8.0f} KB")
     print(f"  -> {OUT_PATH.name}")

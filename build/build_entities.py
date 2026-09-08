@@ -42,10 +42,18 @@ from sources import (  # noqa: E402
 
 DATA_DIR = ROOT / "data"
 
-# A trailing account number or bare zip on a contract vendor string: the tail of
-# "CONSOLIDATED COMPANIES, INC. 24641" or "CATALYST PUBLIC AFFAIRS (68508)".
-# Three digits or more, so a name genuinely ending in a small number survives.
-_BOOKKEEPING_TAIL = re.compile(r"(\s[-–]?\s*\d{3,}\s*$)|(\(\s*\d{3,}\s*\)\s*$)")
+# Bookkeeping noise a contract vendor string carries, in any of the shapes the
+# state actually publishes it: a trailing account number ("CONSOLIDATED
+# COMPANIES, INC. 24641"), a bare zip in parentheses ("CATALYST PUBLIC AFFAIRS
+# (68508)"), a leading account number ("10084 CROUCH RECREATION"), or a trailing
+# decimal reference ("KIEWIT BUILDING GROUP, INC. 4.12788"). A name is only
+# rejected as a display name if a cleaner spelling of the same entity exists.
+_BOOKKEEPING = re.compile(
+    r"(\s[-–]?\s*\d{3,}\s*$)"      # trailing account number
+    r"|(\(\s*\d{3,}\s*\)\s*$)"    # trailing bare zip
+    r"|(^\s*\d{4,}\s)"              # leading account number
+    r"|(\s\d+\.\d{3,}\s*$)"        # trailing decimal reference
+)
 LEDGER_PATH = ROOT / "data" / "manual" / "resolutions.csv"
 
 
@@ -156,8 +164,23 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
     for match in accepted:
         clusters.union(match["left_key"], match["right_key"])
 
+    # Every key that no cluster claimed is still a real organization with real
+    # records -- it simply never matched anything in another source. Leaving them
+    # out made the hub a connections list rather than a search: 779 entities out
+    # of 80,066 names, so a reporter looking up a vendor that never donated got
+    # nothing back even though ne-contracts holds all of its records.
+    clustered = {member for members in clusters.groups().values() for member in members}
+    singletons = {
+        key
+        for keyed in (vendors, contributors, lobbying)
+        for key in keyed
+        if key not in clustered
+    }
+    groups = dict(clusters.groups())
+    groups.update({key: {key} for key in singletons})
+
     entities = []
-    for root, members in sorted(clusters.groups().items()):
+    for root, members in sorted(groups.items()):
         display_name = _canonical_name(members, vendors, contributors, lobbying)
         for member in sorted(members):
             for source, keyed in (
@@ -214,7 +237,9 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
         "auto_accepted": len(accepted),
         "awaiting_review": len(review),
         "human_decisions_on_record": len(ledger),
-        "canonical_entities": len(clusters.groups()),
+        "canonical_entities": len(groups),
+        "clustered_entities": len(clusters.groups()),
+        "singleton_entities": len(singletons),
         "aliases": len(entities),
         "common_tokens_skipped": len(index.common_tokens),
     }
@@ -246,7 +271,7 @@ def _canonical_name(members, *keyed_sources) -> str:
     if not aliases:
         return max(members, key=len).title()
     complete = [a for a in aliases if not a.rstrip().endswith("...")]
-    tidy = [a for a in (complete or aliases) if not _BOOKKEEPING_TAIL.search(a)]
+    tidy = [a for a in (complete or aliases) if not _BOOKKEEPING.search(a)]
     return max(tidy or complete or aliases, key=len)
 
 
