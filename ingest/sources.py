@@ -14,6 +14,11 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Each source is a separate GitHub repo (diepjustin/ne-contracts,
+# ne-campaign-finance, ne-lobbying). This resolves correctly only when they
+# are cloned as siblings of this repo -- e.g. all four directly under
+# ~/Documents/GitHub/ -- since these paths read local, gitignored data that
+# never leaves any of those repos' own working trees.
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 CONTRACTS_DATA = REPO_ROOT / "ne-contracts" / "data"
 CAMPAIGN_FINANCE_DATA = REPO_ROOT / "ne-campaign-finance" / "data" / "processed"
