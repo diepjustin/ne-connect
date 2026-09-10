@@ -10,6 +10,3 @@ data/*
 !data/manual/
 data/manual/*
 !data/manual/*.csv
-venv/
-__pycache__/
-*.pyc
