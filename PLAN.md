@@ -1,0 +1,252 @@
+# Nebraska Public Records Hub — implementation plan
+
+> The original one-page brief this plan was built from is preserved at the bottom under "Original brief".
+
+
+
+## Context
+
+`ne-connect/PLAN.md` describes the goal: one search box for Nebraska journalists across state contracts, campaign finance, lobbying, business filings and more, each source scraped by its own polite, deduplicating scraper, every hit linked to the primary record. Three sources are live today (contracts, NADC 2022+, lobbying positions) and the hub at `/ne-connect/` joins them at build time.
+
+Exploration found the hub shipping in a degraded state and the lobbying collection stalled silently. This plan repairs that first, then adds three sources in the agreed order, automating each source's refresh as it lands.
+
+**Decisions made (do not revisit):**
+- Phase 0 hygiene before new sources.
+- Federation stays: each source is a sibling project publishing CSVs; the hub is a read-only join; dedup lives in each scraper.
+- New sources in order: NADC pre-2022 + C-1 → Secretary of State (free per-entity lookups only) → FEC. Salary roster, 990s, votes are later.
+- CI modeled on `.github/workflows/ne-contracts-daily.yml`, landed per phase, not at the end.
+- Lobbying backfill covers all six missing legislatures.
+- C-1: if only PDFs exist, parse them (reuse the ne-contracts text pipeline).
+- ne-campaign-finance gets a minimal searchable page with `?q=` so campaign-finance hits link to hosted rows.
+- `ne-connect/new/`: fold `docs/*.md` and `CLAUDE.md` into `ne-connect/`, delete the rest.
+
+**Verified state driving Phase 0** (paths under repo root):
+- Position sweep died on an uncaught `requests.ReadTimeout` after legislature 109. `ne-lobbying/scripts/lobby.py:161-178` retries only HTTP 429; `:436-441` catches only `KeyboardInterrupt`/`RateLimited`. `sweep_all.sh:19-22` treats a vanished pid as "finished", so 108-3, 108, 107-1, 107, 106, 105 were never started. 39,909 positions for 109 only.
+- `expenses.py:170-182 scrape_aggregate` appends through `write_rows` (`:158-167`) with no guard; `sweep_all.sh:36` reruns it each chain → `expenses_statewide.csv` has 816 rows, 408 expected.
+- Form B per-entity sweep running now (pid 38545, 1,400 of 5,412 entity-years). Form C (8,604 entity-years → `expenses_principal.csv`, already read by `ne-connect/ingest/sources.py:158-186`) follows. Do not restart the chain while it runs.
+- Lobbying CSVs are gitignored and exist only on this machine.
+- Hub `d/entities.json` (78,968 entities, 3.1 MB) has no aliases or URLs; `build_site.py:538-548 widen()` sets `aliases: []`, so typed searches lose alias matching and all primary-record links. `lite: true` is never read.
+- Campaign-finance entities have no `source_url` (`build_entities.py:205-208`).
+- `data/manual/resolutions.csv`: zero human decisions; 2,134 pairs queued.
+- `ne-connect/README.md` header stale (779 entities / 86 tests vs 78,968 / 91); `:278-281` falsely says CI builds the payload.
+- Root `index.html:942-949` and `sitemap.xml` link only ne-contracts. `pages.yml`'s blanket rsync also publishes `ne-connect/new/site/index.html`, a skeleton page.
+- `ne-contracts/index.html:2417` reads `?q=` on landing, so a deep link into a vendor search works today.
+- `git count-objects`: 561 MiB loose objects vs 4 MiB packed.
+
+## Dedup contract (the one requirement PLAN.md states explicitly)
+
+Every scraper must be idempotent: rerunning never adds a row it already has. Each source owns a natural key and a write mode.
+
+| Source | Natural key | Write mode | Where enforced |
+|---|---|---|---|
+| Contracts | full `Detail URL` hash | append, known keys skipped | `ne-contracts/scripts/scrape.py:694,806,1041` (done) |
+| NADC modern | `receipt_id` + `include_in_total` | rewrite from newest snapshot | `ne-campaign-finance/scripts/normalize.py:226,257` (done) |
+| NADC legacy | `(source_form, natural key from rtf)` | rewrite from frozen zip | Phase 1 |
+| Lobbying positions | bill token in `scrape_progress.json`; row grain is `registration_id` | append per bill, bill-level skip | `lobby.py:402-420` (done) |
+| Lobbying expenses, per entity | `form/entity_id/year` token | append per token | `expenses.py:198-216` (done) |
+| Lobbying expenses, statewide | `(form, year, category)` | **rewrite** | Phase 0.3 (bug today) |
+| C-1 | `disclosure_id` (document URL) | rewrite from raw captures | Phase 1 |
+| SoS | `query_key` token; row key `sos_account_number` | rewrite from cache | Phase 2 |
+| FEC | `sub_id`; fallback `(cycle, image_num, tran_id)` | rewrite from raw zip | Phase 3 |
+| Hub | entity key + source + era | full rebuild | `build_entities.py` (done) |
+
+A shared check script in each project (`scripts/check_data.py`) asserts key uniqueness on its outputs and runs before `build_site.py` and in CI.
+
+---
+
+## Phase 0 — Repair and harden
+
+Split in two: **0A** can be done now while the Form B sweep runs; **0B** waits on the sweeps. Unattended scrape time: Form B remainder ~3 h, Form C ~7 h, six legislatures ~7,500 requests ~8 h. Roughly 18 h total, run over a weekend.
+
+### 0A — while the sweep runs
+
+**0.1 Transient network errors get the RateLimited treatment**
+- `lobby.py`: add `class Unreachable(RateLimited)` beside `RateLimited` (`:112`). Every existing `except RateLimited` (`lobby.py:438`, `:492`, `expenses.py:225`) then inherits stop-cleanly-save-resume.
+- `Fetcher._fetch` (`:161-178`): wrap `session.get/post` in `try/except (requests.ConnectionError, requests.Timeout)`; back off `delay * 2**(attempt+1)`, count in `network_retries`, continue; after `MAX_RETRIES` raise `Unreachable`.
+- Tests (`ne-lobbying/tests/test_lobby.py`): stub session raises twice then succeeds → page returned, `network_retries == 2`; always raises → `Unreachable`, is-a `RateLimited`.
+
+**0.2 Completion marker and exit codes**
+- `scrape_positions` (`:377-456`): `finished=True` only when the loop exits normally; `finally` writes `progress["complete"]` and `progress["legislatures_requested"]`. `main()` (`:507-540`) returns 0 if complete, 2 otherwise. Same in `expenses.py scrape_entities` (`:185-234`) with `progress["complete"] = {"B":…, "C":…}`.
+- `sweep_all.sh`: replace the pid-wait (`:19-26`) with a bounded retry loop (≤12 attempts, `sleep 300`) that reruns `lobby.py --all --prefixes LB LR --delay 2.0` until `complete` is true; same loop around `--entities` (`:44`). Keep `set -u`; no `set -e`.
+- Test: sibling of `test_progress_round_trips` (`test_lobby.py:130`) for `complete` false after a simulated `RateLimited`, true after a clean `--max-number 2`.
+
+**0.3 Idempotent statewide totals**
+- `write_rows`: add `mode` (default `"a"`); `scrape_aggregate` passes `"w"`. One-time repair: rerun `--aggregate` (all 24 responses cached → zero requests); verify 408 rows.
+- New `ne-lobbying/scripts/check_data.py` fails on duplicate keys in any expenses CSV; chain runs it before `build_site.py`.
+- Test: `scrape_aggregate` twice against a stub fetcher → one pass's row count.
+
+**0.6 Hub lazy index keeps aliases and links, header-driven**
+- Contract `Detail URL`s are opaque ~286-char strings; a URL column for ~54k vendors is ~15 MB. Ship link *tokens* and derive URLs in the page.
+- Change `d/entities.json` from bare positional arrays to `{"columns": [...], "rows": [[...], ...]}` so every later phase adds a named column without touching the JS slot logic. Initial columns: `name, bits, contract_amt, contract_recs, contrib_amt, contrib_recs, lobby_recs, lobby_id, aliases` (`aliases` only for the ~3,227 entities with >1 alias; `lobby_id` for ~650). Expected growth ~350 KB; keep under 4 MB raw.
+- `build_full_index` (`build_site.py:181-214`) emits the header; `widen()` (`:538-548`) reads by column name and derives links from templates defined once: contracts → `../ne-contracts/?q=<name>`; lobbying → `https://nebraskalegislature.gov/lobbyist/view.php?link=view_principal&id=<lobby_id>` (same as `sources.py:230-233`); campaign finance → `../ne-campaign-finance/?q=<name>` (Phase 1 builds the page; until then the NADC search page from 0.7).
+- Read the `lite` flag: "single source; linking to that source's search for this name" instead of the unconditional "nothing was matched to it".
+- Tests: header present; row length equals column count; one-alias entity has empty alias cell; lobbying entity carries its id.
+
+**0.7 Stopgap door to NADC for campaign-finance entities**
+- `sources.py load_contributors` (`:90-127`): set `sample_url` to the FirstTuesday contributions search page (`ne-campaign-finance/README.md:111`), labelled "search NADC for this name". Replaced by the hosted page in Phase 1.
+
+**0.11 Root site links**
+- `index.html:942-949`: project card for the hub, plus cards for campaign finance and lobbying. `sitemap.xml`: add the three paths.
+
+**0.12 Fold `new/` into `ne-connect/`, delete the rest**
+- Move `new/docs/{DATA_SOURCES,ENTITY_RESOLUTION,PRIVACY,SCHEMA,UI_SPEC}.md` → `ne-connect/docs/`; `new/CLAUDE.md` → `ne-connect/CLAUDE.md`. Absorb `ne-connect/PLAN.md` (untracked) into a "Goals" section at the top of `docs/DATA_SOURCES.md` and delete it.
+- Reconcile while moving: `SCHEMA.md` describes the real artifacts (`canonical_entities.csv` columns `build_entities.py:190-212`, ledger `resolutions.py:38-48`, the entities.json header layout, this plan's dedup table); `ENTITY_RESOLUTION.md` carries the live formula (`match.py:98-100`, `AUTO_WEIGHT_MULTIPLE`, persons never auto); `DATA_SOURCES.md` marks the three live sources shipped and adds FEC; `CLAUDE.md` architecture block matches `build/`, `ingest/`, `resolve/`, root `index.html`; drop DuckDB/parquet/cents.
+- Delete `new/` wholesale. This also stops `pages.yml` publishing `new/site/index.html`. Commit message notes `scrapers/base.py`'s manifest idea is carried into Phase 2.
+
+**0.13 Optional local `git gc`**
+- `git gc` or `git repack -a -d -f --window=250`. Local only.
+
+### 0B — after the sweeps
+
+**0.4 Form C reaches the hub**
+- After the first `C/` tokens land, open one cached Form C response and confirm the total label matches the `"11."` prefix in `sources.py:175` and the fixture `tests/test_expenses_ingest.py:22-27`; fix both together if not.
+
+**0.5 Lobbying backup: GitHub Release, not commits**
+- Positions will reach ~15-20 MB and are appended every run; committing repeats the 546 MB history problem. Use the `extraction-data-*` release pattern from `pages.yml`. Now: gzip `data/*.csv` + progress JSONs, `gh release create lobbying-data-<date>`. `git add ne-lobbying/data/expenses_progress.json` (resume state, 28 KB).
+
+**0.8 Bounded review-queue slice (~2 h)**
+- Decide the 158 `identical_key` pairs plus the top 50 fuzzy pairs by dollars with `build/review.py --same/--different --by jdiep --note`. Optional `--next N --kind identical_key` helper; write path unchanged. Defer the remaining ~1,900.
+
+**0.9 Rebuild and commit**
+- `build/build_entities.py` (~105 s) → `build/build_site.py` → commit `index.html`, `d/entities.json`, `data/manual/resolutions.csv`.
+
+**0.10 READMEs with real numbers**
+- `ne-connect/README.md`: header from `entities_summary.json`; rewrite `:278-281`; document the header-driven index; link `docs/`.
+- `ne-lobbying/README.md`: actual positions / tests / legislature coverage / Form B and C status; describe the release backup.
+
+**0.14 First two workflows (pattern in Phase 4 notes below)**
+- `ne-campaign-finance-daily.yml`: tests → restore cache (miss just redownloads) → `download_extracts.py` → `validate.py` shrink guard → `normalize.py` → save. Minutes.
+- `ne-lobbying-daily.yml`: nightly ~40 min: tests → restore `ne-lobbying-data-` with `lobbying-data-*` release fallback → `--aggregate` → `--entities` current year `--refresh` → `check_data.py` → save. Weekly Sunday ~4 h: `lobby.py --legislatures 109 --refresh-legislature` (new flag: drop that legislature's tokens, bypass cache). Monthly release upload. Historical legislatures never re-swept in CI.
+
+### Phase 0 verification
+- `ne-lobbying`: `pytest tests -q`; 408 unique statewide rows; kill a `--max-number 3` run, confirm `complete:false`, rerun continues; `check_data.py` clean.
+- `ne-connect`: `pytest tests -q`; summary totals unchanged except human decisions; locally type a truncated lobbying alias and confirm match + link; type a vendor and confirm the contracts link lands filtered.
+- Root: `python3 -m http.server`, click through the new cards. Both workflows green on `workflow_dispatch`.
+
+Effort: 5-7 working days plus ~18 h unattended sweeps.
+
+---
+
+## Phase 1 — NADC pre-2022 + C-1, and a searchable campaign-finance page
+
+Lives in `ne-campaign-finance/`.
+
+**1.1 `scripts/download_legacy.py`**
+- Fetch `nebraska.gov/nadc_data/nadc_data.zip` (`README.md:58`, frozen) once into `data/raw/legacy/<date>/`; sha256 into `scrape_meta.json["legacy"]`; reruns compare sha and skip. Reuse `fetch_zip` (`download_extracts.py:63`) and `DEFAULT_USER_AGENT`. Zip immutable; extract `nadc_tables.rtf` and the delimited files.
+- `scripts/validate_legacy.py`: header gate like `validate.py`; exact-duplicate rows counted and dropped, not fatal.
+
+**1.2 `scripts/normalize_legacy.py` → `contributions_legacy.csv`, `expenditures_legacy.csv`**
+- Columns of `contributions.csv` (`normalize.py:198-208`) plus `era="pre2022"`, `source_form`. `receipt_id = legacy:<form>:<key>`; `org_id = legacy:<committee id>`. `source_url` = legacy search UI. Never writes into `contributions.csv`. Byte-identical on rerun (test).
+
+**1.3 Searchable page `ne-campaign-finance/index.html` with `?q=`**
+- `scripts/build_site.py` grows from landing page to a small search site: an inline index of the 25,174 contributors and 894 filers (name, totals, counts, era) and a lazily fetched `d/rows.json` of contributions grouped by contributor key (~117k modern rows; add legacy rows when 1.2 lands, tagged by era). Pattern copied from ne-connect's inline + lazy split, not from the 6.85 MB contracts page. Read `?q=` on landing like `ne-contracts/index.html:2417`. Per-row link to `OrganizationDetail.aspx?OrganizationID=<org_id>` for the filer (README:121); itemization caveat on every view. Respect `docs/PRIVACY.md`: no address display, no reverse-address search, no bulk donor export.
+- Hub 0.6 template for campaign finance switches to `../ne-campaign-finance/?q=`.
+
+**1.4 Hub ingest with `era`**
+- `ingest/sources.py`: `era: str = "modern"` on `Party` (`:28-45`); `load_contributors(..., filename, era)`; `load_legacy_contributors()`. Same source, role, bit 2: era is a property of the record.
+- `build_entities.py`: key both eras; `era` column in `canonical_entities.csv`, one row per (alias, source, era).
+- `build_site.py`: new named columns `contrib_amt_legacy`, `contrib_recs_legacy`; inline totals `{modern:{}, pre2022:{}}`; rendered as two lines, never summed; `retrieval_dates()` adds a "pre-2022 data frozen by the state" note.
+
+**1.5 C-1 / C-2 statements of financial interest, `scripts/scrape_c1.py`**
+- Recon gate first: find where C-1s live (FirstTuesday search with the "Individual Supplemental Filer" quirk from `docs/DATA_SOURCES.md`, or NADC's own PDF listings). Record the finding in `DATA_SOURCES.md`.
+- Filer index: copy `lobby.py:Fetcher` (POST body in cache key `:133-141`) → `data/processed/c1_filings.csv` (`disclosure_id, year, filer_name_raw, filer_office, document_url, retrieved_at`). Every filing gets a link even before parsing.
+- PDF parsing (decided: parse): reuse `ne-contracts/scripts/extract_text.py`'s pypdf + pdfminer path (`:52-53`) for text-layer PDFs; for scanned ones run the OCR pilot ne-contracts scoped but never ran (`ne-contracts/README.md:1057`), on the C-1 corpus first since it is small. Output `financial_interests.csv` (`disclosure_id, item_type, counterparty_name_raw, detail, source_url, retrieved_at`) with the state's text verbatim. Raw PDFs immutable under `data/raw/c1/`.
+- Hub: source `"disclosures"`, bit 32 (reserve 8 = SoS, 16 = FEC now). Counterparty orgs as role `counterparty`; filers as `entity_type="individual"` so they search but never auto-merge (`match.py:decide`).
+
+Tests: `test_normalize_legacy.py` (header gate, dedupe count, era, idempotency); `test_build_site.py` for the search index shape and `?q=`; `ne-connect/tests/test_era.py`; C-1 parser tests from trimmed HTML and a fixture PDF.
+**1.6 Workflow**: extend `ne-campaign-finance-daily.yml` with the legacy sha check, `scrape_c1.py --new-only`, and `build_site.py`; then `ne-connect-nightly.yml` (see Phase 4 notes) since the hub now has two automated inputs plus contracts.
+Risks: rtf schema quality; legacy committee ids not joinable to modern; OCR quality on C-1 scans; `d/rows.json` size (measure; split by first letter if over ~5 MB).
+Effort: 8-11 days (legacy 3-4, search page 2, C-1 3-5).
+
+---
+
+## Phase 2 — Secretary of State lookups (`ne-sos/`)
+
+New sibling mirroring ne-lobbying: `README.md`, `requirements.txt`, `scripts/sos.py`, `scripts/check_data.py`, `data/{raw,cache}` gitignored, `data/sos_progress.json` tracked, `tests/`.
+
+**2.0 Gate: terms of use.** Read robots.txt and terms for the free corporate search (run by Nebraska Interactive). Record finding and date in `docs/DATA_SOURCES.md`. If forbidden, stop (CLAUDE.md rule 6).
+
+**2.1 Input.** `ne-connect/data/canonical_entities.csv` filtered to organizations; canonical name first, aliases only on no result. Priority: cross-source entities, lobbying principals, vendors by contract total. `--limit N` per run; never a full pass in one go (~55k names ≈ 30 h).
+
+**2.2 `scripts/sos.py`.** Copy `Fetcher` from `lobby.py:118-180` (with 0.1), change `BASE`; add `write_manifest()` per run (`data/raw/<date>/manifest.json`: source URLs, retrieved_at, sha256). Raw HTML content-addressed, never overwritten; `--refresh` writes a new dated capture. Parse results (name, account number, type, status) and detail (registered agent, principal office, filed documents). `match_kind` = `exact` (via the hub's `normalize_org`) / `multiple` / `none`; only `exact` carries `hub_entity_id`. Outputs `sos_entities.csv` (`query_key, hub_entity_id, match_kind, sos_account_number, name_raw, entity_type, status, registered_agent_raw, principal_office_city, principal_office_state, principal_office_zip, source_url, retrieved_at`) and `sos_agents.csv`. Street addresses stay in raw only. Resumable tokens flushed every 25; CSVs rewritten from cache each run. 2 s delay, `Retry-After`, UA with contact (copy `test_user_agent.py` from ne-contracts).
+
+**2.3 Hub: bit 8 and connections.** `load_sos_entities()` → `Party(source="sos", role="registrant", source_id=account, sample_url=detail URL)`. Join by construction: extend `resolve/authority.py short_circuit` to accept pre-declared links with `match_kind="sos_lookup"`; `multiple`/`none` never enter. Named column `sos_status`. New `build/build_connections.py` → `data/connections.csv` (`entity_a, entity_b, basis, evidence`) with `shared_registered_agent` and `same_principal_office` (normalized address, displayed as city+ZIP). Org-to-org only; never a person-to-person edge. Rendered inline for cross-source and SoS-linked entities only.
+
+**2.4 Workflow** `ne-sos-weekly.yml`: restore hub cache for `canonical_entities.csv`, restore `ne-sos-data-`, `sos.py --limit 500`, `check_data.py`, save.
+
+Tests: parsers from trimmed captures; `match_kind`; idempotency; hub union-without-scoring; connection rules. Risks: ToU forbids; pagination; exact-name collisions (show status and city). Effort: 4-6 days plus the gate.
+
+---
+
+## Phase 3 — FEC federal campaign finance (`ne-fec/`)
+
+Bulk files per cycle at `https://www.fec.gov/files/bulk-downloads/<YYYY>/`: `indiv<yy>.zip`, `cm<yy>.zip`, `cn<yy>.zip`, optionally `pas2<yy>.zip`, `oth<yy>.zip`; headers from `data_dictionaries/`. No API key, reproducible snapshots.
+
+- `scripts/download_bulk.py` (stream to `data/raw/<cycle>/`, sha256 in `scrape_meta.json`); `scripts/filter_ne.py` (stream-decode; `STATE == "NE"` from indiv, `CMTE_ST == "NE"` from cm, `CAND_ST == "NE" or CAND_OFFICE_ST == "NE"` from cn; never load indiv whole); `scripts/normalize.py` → `fec_contributions_ne.csv`, `fec_committees_ne.csv`, `fec_candidates_ne.csv`; `check_data.py`; `tests/`.
+- Contributions schema: `sub_id, cmte_id, cmte_name, amndt_ind, rpt_tp, transaction_tp, entity_tp, name, city, state, zip, transaction_dt, transaction_amt, other_id, tran_id, file_num, image_num, cycle, source_url, source_snapshot`; `source_url = https://docquery.fec.gov/cgi-bin/fecimg/?<IMAGE_NUM>`. Employer and occupation are kept in raw only, not in processed output (privacy parity with NADC handling).
+- Dedup: `sub_id`; fallback `(cycle, image_num, tran_id)`; same `(cmte_id, tran_id)` keeps newest `file_num` as the `include_in_total` analogue. Rewritten from raw each run.
+- Hub: bit 16; `load_fec_contributors()` with `entity_type="individual"` when `entity_tp == "IND"` (always review, never auto-merge, no connection edges, no address display); parse `LAST, FIRST` per `sources.py:130-146`. Committees and candidates as organizations with `source_id`. Named columns `fec_amt`, `fec_recs`; label "Federal contributions (FEC)" with the $200 federal itemization caveat versus Nebraska's $250.
+- Workflow `ne-fec-weekly.yml`: Sunday, current cycle only, older cycles from cache; add FEC restore to `ne-connect-nightly.yml`.
+
+Tests: header gate; NE-only filter; `sub_id` dedupe; person parse; FEC `IND` never auto-merges with a vendor. Risks: indiv zips multi-GB (stream, cache NE slice per cycle). Effort: 3-5 days.
+
+---
+
+## Phase 4 — Automation notes (applied inside each phase above)
+
+**Reusable pattern** from `ne-contracts-daily.yml` and `pages.yml`:
+1. Two UTC crons plus the gate step matching `TZ=America/Chicago date +%z` to the cron that fired (`:37-99`); never gate on wall-clock hour.
+2. Tests before any network step.
+3. `actions/cache/restore@v5` keyed `<prefix>-${{ github.run_id }}`, `restore-keys: <prefix>-`, `fail-on-cache-miss: true` for baselines (`:119-130`).
+4. Release fallback: `gh release list … | sort_by(.tagName) | last`, then `gh release download`.
+5. Guard rails fail the job before publish.
+6. Sunday-or-`force_publish` dispatches `gh workflow run pages.yml` (`:182-188`).
+7. "Worth caching" check before `cache/save`, save `if: always()`, prune to newest 3 (`:196-224`).
+8. `concurrency: cancel-in-progress: false`.
+
+**Hub workflow `ne-connect-nightly.yml`** (lands in Phase 1.6):
+- The ne-contracts cache is 2.4 GB+ but the hub needs three CSVs (~365 MB). Add a step to `ne-contracts-daily.yml` that saves a slim `ne-contracts-hub-` cache containing only `nu_contracts.csv`, `nu_purchase_orders.csv`, `state_agencies.csv`, `scrape_meta.json`. The hub restores that, plus `ne-campaign-finance-data-`, `ne-lobbying-data-` (release fallback), later `ne-sos-data-`, `ne-fec-data-`.
+- Tests → `build_entities.py` → `build_site.py` → new `build/verify_payload.py` (entity count within 10% of previous summary, every expected source bit present, `entities.json` header matches rows) → save `ne-connect-payload-<hash of build/**, resolve/**, ingest/**, data/manual/**>-<run_id>` with `index.html`, `d/`, `entities_summary.json` → Sunday dispatch `pages.yml`.
+- After a week green: stop committing `ne-connect/index.html` and `d/entities.json` (`.gitignore`), and upload `ne-connect-payload-<date>` releases (~1 MB gz) as the cold-start fallback.
+- `pages.yml`: add "Restore the hub payload" cache/restore with release fallback; stage assertions `test -f _site/ne-connect/index.html`, `test -f _site/ne-connect/d/entities.json`, entity count > 70,000; `--exclude 'ne-*/data' --exclude 'ne-*/venv'` on the rsync.
+
+**Rate-limit budget:** contracts nightly (existing); campaign finance minutes; lobbying nightly ~40 min, weekly ~4 h; SoS ≤ 20 min weekly; FEC download-bound weekly; hub ~5 min. No two scrapers share a host in the same window.
+
+**Workflow tests:** `tests/test_workflows.py` at repo root parses each YAML for the invariants (two crons, gate step, `cancel-in-progress: false`, every save guarded, `fail-on-cache-miss` on baselines). `verify_payload.py` unit tests.
+
+**Risk:** Actions cache eviction (7 days unused / 10 GB). Release fallbacks are what make the design safe; add each before relying on its cache.
+
+---
+
+## Definition of done, every phase
+- Tests pass in every touched project with no network and no `data/`.
+- `check_data.py` clean on every output the phase produces.
+- `docs/SCHEMA.md` and `docs/DATA_SOURCES.md` updated in the same commit as the code.
+- Every new displayed figure carries a source link and retrieval date; the page states any coverage gap.
+- The phase's workflow has run green on `workflow_dispatch` at least once before the phase closes.
+
+## Test baseline
+ne-connect 91, ne-campaign-finance 43, ne-lobbying 19, ne-contracts existing.
+
+## Total effort
+Roughly 25-34 working days across the phases, plus unattended scrape wall-clock (about 18 h in Phase 0, C-1 OCR and FEC downloads later).
+
+---
+
+## Original brief (as written before this plan, 2026-09-08)
+
+# Nebraska Public Database 
+The end goal of this project is to have a set of scraper that obtain various public records across multiple Nebraska state websites and updates a central dataset. The scrapers need to check for existing data and prevent duplicates from appearing in the the dataset. Each goverment site will get its own scraper. 
+
+This dataset is for Nebraska journalists to act as a centralized hub for records from the state government. It can include information from the Nebraska State Contracts Database, which I already have a scraper for, Nebraska Leglisature, Nebraska Accountability and Disclosure Commission, the federal election commmision, any other useful database.
+
+## Resources
+This is inspired by CalMaters's Power Search, a campaign finance scraper for California. https://github.com/CalMatters/powersearch-download.
+
+At https://github.com/diepjustin/diepjustin.github.io/tree/main/ne-contracts is the existing scraper for Nebraska State Contracts
+
+ Nebraska Public Records Hub — one search box across state contracts, NADC campaign finance, lobbyist registrations, Secretary of State business filings, and the state salary roster. Type a name, see every connection with links to the primary record. Multiplies the value of ne-contracts and every future database. Heavier scraping upfront, huge payoff.
+
+ Cross-database link checker. One search box that hits ne-contracts, NADC donors, lobbyists, SoS filings, 990s, and salaries at once and shows every connection for a name.
+
+ I got a start on this project here https://github.com/diepjustin/diepjustin.github.io/tree/main/ne-connect
