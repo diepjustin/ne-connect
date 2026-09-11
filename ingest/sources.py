@@ -26,6 +26,15 @@ LOBBYING_DATA = REPO_ROOT / "ne-lobbying" / "data"
 
 CONTRACT_FILES = ("nu_contracts.csv", "nu_purchase_orders.csv", "state_agencies.csv")
 
+# Stopgap until Phase 1 ships a hosted, per-name campaign-finance search page:
+# link to NADC's own contributions search instead of a dead end. Not
+# per-name -- FirstTuesday's search is a WebForms POST, not a GET query
+# string -- so the label says "search" rather than promising a direct hit.
+NADC_CONTRIBUTIONS_SEARCH_URL = (
+    "https://nadc-e.nebraska.gov/PublicSite/SearchPages/Search.aspx"
+    "?SearchTypeCodeHook=F0FEA582-08C3-42BA-B008-0F5067C5791B"
+)
+
 # csv defaults to 128 KB; ne-contracts has contract descriptions well past it.
 csv.field_size_limit(sys.maxsize)
 
@@ -117,6 +126,7 @@ def load_contributors(data_dir: Path = None):
                     entity_type=(
                         "individual" if row.get("source_type") == "Individual" else "organization"
                     ),
+                    sample_url=NADC_CONTRIBUTIONS_SEARCH_URL,
                 )
             party.record_count += 1
             try:
