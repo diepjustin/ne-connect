@@ -147,7 +147,7 @@
   rows carry no dollar value at all, so an organization showing no contract total
   may still hold contracts. Contributions cover 2022–2026 only, the years
   Nebraska's current e-filing system spans, while contract records reach back
-  further: the two halves of a row describe different periods. Lobbying coverage is <strong>partial</strong>: 1,100 bills swept (LB only, session 109). Completing the sweep would add entities and connections, not remove them.</p>
+  further: the two halves of a row describe different periods. Lobbying coverage is <strong>partial</strong>: 1,576 bills swept (LB/LR only, session 109). Completing the sweep would add entities and connections, not remove them.</p>
   <p>Lobbying figures, where a dollar amount is shown, are a principal's own
   reported total from Form C &mdash; compensation, reimbursement, entertainment,
   lodging, travel, gifts and admissions &mdash; not audited spending. Form B,
@@ -162,7 +162,7 @@
   is a stronger claim than the rest.</p>
   <p>No analytics, no tracking, no external fonts, and nothing loads from a third
   party — searching a name here does not send it anywhere.</p>
-  <p>Built 2026-09-08 from <code>data/canonical_entities.csv</code>.
+  <p>Built 2026-09-10 from <code>data/canonical_entities.csv</code>.
   Method, caveats and open work are in the
   <a href="https://github.com/diepjustin/diepjustin.github.io/tree/main/ne-connect">project README</a>.</p>
 </footer>
@@ -177,6 +177,17 @@ const LABELS = {"contracts": "Contracts", "campaign_finance": "Contributions", "
 const RETRIEVED = {"contracts": "2026-08-11", "campaign_finance": "2026-09-08", "lobbying": "2026-09-08"};
 const PROJECTS = {"contracts": "../ne-contracts/", "campaign_finance": "../ne-campaign-finance/", "lobbying": "../ne-lobbying/"};
 const ORDER = ["contracts", "campaign_finance", "lobbying"];
+const NADC_SEARCH_URL = "https://nadc-e.nebraska.gov/PublicSite/SearchPages/Search.aspx?SearchTypeCodeHook=F0FEA582-08C3-42BA-B008-0F5067C5791B";
+// One link template per source, applied to a lazily-loaded row. Contracts and
+// lobbying can point straight at the record; campaign finance has no per-name
+// search yet (Phase 1), so every contributor gets the same NADC search page.
+const SOURCE_LINK = {
+  contracts: name => '../ne-contracts/?q=' + encodeURIComponent(name),
+  campaign_finance: () => NADC_SEARCH_URL,
+  lobbying: (name, lobbyId) => lobbyId
+    ? 'https://nebraskalegislature.gov/lobbyist/view.php?link=view_principal&id=' + lobbyId
+    : '',
+};
 
 // Contract totals run past a billion -- Hawkins Construction alone is $1.28B
 // across 14 years -- and "$1282.2M" is not a number anyone reads.
@@ -249,8 +260,13 @@ function render(rows, pool) {
 
     const prov = e.sources.map(s => {
       const when = RETRIEVED[s] ? 'retrieved ' + RETRIEVED[s] : 'retrieval date unknown';
-      return '<div class="alias">' + LABELS[s] + ' — <a href="' + PROJECTS[s] +
-        '" rel="noopener">source project</a>, ' + when + '</div>';
+      // A lazily-loaded row carries a link straight to this name's own search
+      // or record; an inline cross-source entity only has the source's home.
+      const deepLink = e.lite && e.links && e.links[s];
+      const href = deepLink || PROJECTS[s];
+      const linkLabel = deepLink ? 'search this name' : 'source project';
+      return '<div class="alias">' + LABELS[s] + ' — <a href="' + esc(href) +
+        '" rel="noopener">' + linkLabel + '</a>, ' + when + '</div>';
     }).join('');
 
     // UI_SPEC: any match shown carries its score and the reason it matched.
@@ -263,6 +279,9 @@ function render(rows, pool) {
         esc(e.match.reason) + '</div>' +
         '<div class="alias">Machine-decided and unreviewed. No person has ' +
         'confirmed this grouping.</div>';
+    } else if (e.lite) {
+      conf = '<div class="alias">Single source; linking to that source\'s ' +
+        'search for this name.</div>';
     } else {
       conf = '<div class="alias">Single source; nothing was matched to it.</div>';
     }
@@ -279,18 +298,36 @@ function render(rows, pool) {
   }).join('');
 }
 
-// The lazily-fetched records are positional arrays; widen them to the same
-// shape the inline entities use so one render path serves both.
-function widen(a) {
+// The lazily-fetched index is {columns, rows}; widen each row, by column
+// name, to the same shape the inline entities use so one render path serves
+// both. Reading by name (not position) is what lets a later phase append a
+// column here without this function having to change for the old ones.
+let COL = null;
+function widen(row) {
+  const bits = row[COL.bits];
   const sources = [];
-  if (a[1] & BITS.contracts) sources.push('contracts');
-  if (a[1] & BITS.campaign_finance) sources.push('campaign_finance');
-  if (a[1] & BITS.lobbying) sources.push('lobbying');
+  if (bits & BITS.contracts) sources.push('contracts');
+  if (bits & BITS.campaign_finance) sources.push('campaign_finance');
+  if (bits & BITS.lobbying) sources.push('lobbying');
   const totals = {};
-  if (a[1] & BITS.contracts) totals.contracts = {records: a[3], amount: a[2]};
-  if (a[1] & BITS.campaign_finance) totals.campaign_finance = {records: a[5], amount: a[4]};
-  if (a[1] & BITS.lobbying) totals.lobbying = {records: a[6]};
-  return {name: a[0], sources, totals, aliases: [], match: null, hard_id: false, lite: true};
+  if (bits & BITS.contracts) {
+    totals.contracts = {records: row[COL.contract_recs], amount: row[COL.contract_amt]};
+  }
+  if (bits & BITS.campaign_finance) {
+    totals.campaign_finance = {records: row[COL.contrib_recs], amount: row[COL.contrib_amt]};
+  }
+  if (bits & BITS.lobbying) {
+    totals.lobbying = {records: row[COL.lobby_recs]};
+  }
+  const name = row[COL.name];
+  const lobbyId = row[COL.lobby_id];
+  const aliases = (row[COL.aliases] || []).map(n => ({
+    name: n, sources, url: '',
+  }));
+  return {
+    name, sources, totals, aliases, match: null, hard_id: false, lite: true,
+    links: Object.fromEntries(sources.map(s => [s, SOURCE_LINK[s](name, lobbyId)])),
+  };
 }
 
 async function ensureIndex() {
@@ -299,7 +336,10 @@ async function ensureIndex() {
   count.textContent = 'loading the full index…';
   try {
     const res = await fetch('d/entities.json');
-    ALL = (await res.json()).map(widen);
+    const {columns, rows} = await res.json();
+    COL = {};
+    columns.forEach((c, i) => COL[c] = i);
+    ALL = rows.map(widen);
   } catch (err) {
     ALL = [];
     count.textContent = 'could not load the full index';

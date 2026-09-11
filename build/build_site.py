@@ -19,11 +19,16 @@ from __future__ import annotations
 
 import csv
 import json
+import sys
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "ingest"))
+
+from sources import NADC_CONTRIBUTIONS_SEARCH_URL  # noqa: E402
+
 DATA_DIR = ROOT / "data"
 OUT_PATH = ROOT / "index.html"
 # The full index ships as its own file so the page opens instantly on the
@@ -49,6 +54,14 @@ SOURCE_PROJECTS = {
     "campaign_finance": ("../ne-campaign-finance/", "Nebraska Campaign Finance"),
     "lobbying": ("../ne-lobbying/", "Nebraska Lobbying"),
 }
+
+# d/entities.json header. Named, not positional-by-convention: every later
+# phase (SoS, FEC) appends a column here and the JS reads it by name, so
+# nothing about how existing columns are consumed has to change.
+INDEX_COLUMNS = [
+    "name", "bits", "contract_amt", "contract_recs",
+    "contrib_amt", "contrib_recs", "lobby_recs", "lobby_id", "aliases",
+]
 
 
 def retrieval_dates():
@@ -179,15 +192,18 @@ def build_entities():
 
 
 def build_full_index(rows):
-    """Every entity in one compact array, for search across all of them.
+    """Every entity in one compact table, for search across all of them.
 
-    Positional arrays, not objects: at 79,021 entities the key names would cost
-    more than the values. Order is [name, sourceBits, contractAmount,
-    contractRecords, contributionAmount, contributionRecords, lobbyingRecords].
+    {"columns": [...], "rows": [[...], ...]} rather than a bare array of
+    objects: at 79,021 entities the key names would cost more than the values,
+    but a bare positional array forces every reader to memorize an order that
+    changes across phases. The header lets `widen()` read by name and lets a
+    later phase append a column without touching how existing ones are read.
 
-    Aliases are deliberately omitted here. They matter for entities assembled
-    from several spellings, and those all travel inline in the page; for a
-    single-source entity the alias IS the name.
+    `aliases` carries the *other* spellings folded into this entity -- empty
+    for the ~76,000 entities with exactly one. `lobby_id` is the lobbying
+    source's own principal id, present only where lobbying is one of the
+    entity's sources.
     """
     grouped = defaultdict(list)
     for row in rows:
@@ -197,18 +213,25 @@ def build_full_index(rows):
     for members in grouped.values():
         bits = 0
         totals = defaultdict(lambda: [0, 0.0])
+        lobby_id = ""
         for member in members:
             bits |= SOURCE_BITS[member["source"]]
             totals[member["source"]][0] += int(member["records"] or 0)
             totals[member["source"]][1] += float(member["amount"] or 0)
+            if member["source"] == "lobbying" and member.get("source_id"):
+                lobby_id = member["source_id"]
         contracts = totals["contracts"]
         finance = totals["campaign_finance"]
         lobbying = totals["lobbying"]
+        name = members[0]["canonical_name"]
+        other_aliases = sorted({m["alias"] for m in members} - {name})
         index.append([
-            members[0]["canonical_name"], bits,
+            name, bits,
             round(contracts[1]), contracts[0],
             round(finance[1]), finance[0],
             lobbying[0],
+            lobby_id,
+            other_aliases,
         ])
     index.sort(key=lambda e: (-bin(e[1]).count("1"), -e[2], e[0]))
     return index
@@ -431,6 +454,17 @@ const LABELS = {json.dumps(SOURCE_LABELS)};
 const RETRIEVED = {json.dumps(retrieved)};
 const PROJECTS = {json.dumps({k: v[0] for k, v in SOURCE_PROJECTS.items()})};
 const ORDER = {json.dumps(list(SOURCE_LABELS))};
+const NADC_SEARCH_URL = {json.dumps(NADC_CONTRIBUTIONS_SEARCH_URL)};
+// One link template per source, applied to a lazily-loaded row. Contracts and
+// lobbying can point straight at the record; campaign finance has no per-name
+// search yet (Phase 1), so every contributor gets the same NADC search page.
+const SOURCE_LINK = {{
+  contracts: name => '../ne-contracts/?q=' + encodeURIComponent(name),
+  campaign_finance: () => NADC_SEARCH_URL,
+  lobbying: (name, lobbyId) => lobbyId
+    ? 'https://nebraskalegislature.gov/lobbyist/view.php?link=view_principal&id=' + lobbyId
+    : '',
+}};
 
 // Contract totals run past a billion -- Hawkins Construction alone is $1.28B
 // across 14 years -- and "$1282.2M" is not a number anyone reads.
@@ -503,8 +537,13 @@ function render(rows, pool) {{
 
     const prov = e.sources.map(s => {{
       const when = RETRIEVED[s] ? 'retrieved ' + RETRIEVED[s] : 'retrieval date unknown';
-      return '<div class="alias">' + LABELS[s] + ' — <a href="' + PROJECTS[s] +
-        '" rel="noopener">source project</a>, ' + when + '</div>';
+      // A lazily-loaded row carries a link straight to this name's own search
+      // or record; an inline cross-source entity only has the source's home.
+      const deepLink = e.lite && e.links && e.links[s];
+      const href = deepLink || PROJECTS[s];
+      const linkLabel = deepLink ? 'search this name' : 'source project';
+      return '<div class="alias">' + LABELS[s] + ' — <a href="' + esc(href) +
+        '" rel="noopener">' + linkLabel + '</a>, ' + when + '</div>';
     }}).join('');
 
     // UI_SPEC: any match shown carries its score and the reason it matched.
@@ -517,6 +556,9 @@ function render(rows, pool) {{
         esc(e.match.reason) + '</div>' +
         '<div class="alias">Machine-decided and unreviewed. No person has ' +
         'confirmed this grouping.</div>';
+    }} else if (e.lite) {{
+      conf = '<div class="alias">Single source; linking to that source\\'s ' +
+        'search for this name.</div>';
     }} else {{
       conf = '<div class="alias">Single source; nothing was matched to it.</div>';
     }}
@@ -533,18 +575,36 @@ function render(rows, pool) {{
   }}).join('');
 }}
 
-// The lazily-fetched records are positional arrays; widen them to the same
-// shape the inline entities use so one render path serves both.
-function widen(a) {{
+// The lazily-fetched index is {{columns, rows}}; widen each row, by column
+// name, to the same shape the inline entities use so one render path serves
+// both. Reading by name (not position) is what lets a later phase append a
+// column here without this function having to change for the old ones.
+let COL = null;
+function widen(row) {{
+  const bits = row[COL.bits];
   const sources = [];
-  if (a[1] & BITS.contracts) sources.push('contracts');
-  if (a[1] & BITS.campaign_finance) sources.push('campaign_finance');
-  if (a[1] & BITS.lobbying) sources.push('lobbying');
+  if (bits & BITS.contracts) sources.push('contracts');
+  if (bits & BITS.campaign_finance) sources.push('campaign_finance');
+  if (bits & BITS.lobbying) sources.push('lobbying');
   const totals = {{}};
-  if (a[1] & BITS.contracts) totals.contracts = {{records: a[3], amount: a[2]}};
-  if (a[1] & BITS.campaign_finance) totals.campaign_finance = {{records: a[5], amount: a[4]}};
-  if (a[1] & BITS.lobbying) totals.lobbying = {{records: a[6]}};
-  return {{name: a[0], sources, totals, aliases: [], match: null, hard_id: false, lite: true}};
+  if (bits & BITS.contracts) {{
+    totals.contracts = {{records: row[COL.contract_recs], amount: row[COL.contract_amt]}};
+  }}
+  if (bits & BITS.campaign_finance) {{
+    totals.campaign_finance = {{records: row[COL.contrib_recs], amount: row[COL.contrib_amt]}};
+  }}
+  if (bits & BITS.lobbying) {{
+    totals.lobbying = {{records: row[COL.lobby_recs]}};
+  }}
+  const name = row[COL.name];
+  const lobbyId = row[COL.lobby_id];
+  const aliases = (row[COL.aliases] || []).map(n => ({{
+    name: n, sources, url: '',
+  }}));
+  return {{
+    name, sources, totals, aliases, match: null, hard_id: false, lite: true,
+    links: Object.fromEntries(sources.map(s => [s, SOURCE_LINK[s](name, lobbyId)])),
+  }};
 }}
 
 async function ensureIndex() {{
@@ -553,7 +613,10 @@ async function ensureIndex() {{
   count.textContent = 'loading the full index…';
   try {{
     const res = await fetch('d/entities.json');
-    ALL = (await res.json()).map(widen);
+    const {{columns, rows}} = await res.json();
+    COL = {{}};
+    columns.forEach((c, i) => COL[c] = i);
+    ALL = rows.map(widen);
   }} catch (err) {{
     ALL = [];
     count.textContent = 'could not load the full index';
@@ -600,7 +663,8 @@ def main() -> int:
 
     full = build_full_index(read_csv(DATA_DIR / "canonical_entities.csv"))
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
-    INDEX_PATH.write_text(json.dumps(full, separators=(",", ":")), encoding="utf-8")
+    index_payload = {"columns": INDEX_COLUMNS, "rows": full}
+    INDEX_PATH.write_text(json.dumps(index_payload, separators=(",", ":")), encoding="utf-8")
 
     summary_path = DATA_DIR / "entities_summary.json"
     summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
