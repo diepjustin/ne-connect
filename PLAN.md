@@ -243,10 +243,10 @@ This dataset is for Nebraska journalists to act as a centralized hub for records
 ## Resources
 This is inspired by CalMaters's Power Search, a campaign finance scraper for California. https://github.com/CalMatters/powersearch-download.
 
-At https://github.com/diepjustin/diepjustin.github.io/tree/main/ne-contracts is the existing scraper for Nebraska State Contracts
+At https://github.com/diepjustin/ne-contracts is the existing scraper for Nebraska State Contracts
 
  Nebraska Public Records Hub — one search box across state contracts, NADC campaign finance, lobbyist registrations, Secretary of State business filings, and the state salary roster. Type a name, see every connection with links to the primary record. Multiplies the value of ne-contracts and every future database. Heavier scraping upfront, huge payoff.
 
  Cross-database link checker. One search box that hits ne-contracts, NADC donors, lobbyists, SoS filings, 990s, and salaries at once and shows every connection for a name.
 
- I got a start on this project here https://github.com/diepjustin/diepjustin.github.io/tree/main/ne-connect
+ I got a start on this project here https://github.com/diepjustin/ne-connect
