@@ -131,8 +131,10 @@ Effort: 5-7 working days plus ~18 h unattended sweeps.
 
 Lives in `ne-campaign-finance/`.
 
-**1.1 `scripts/download_legacy.py`**
+**1.1 `scripts/download_legacy.py`** — recon done 2026-09-11, confirms the plan:
 - Fetch `nebraska.gov/nadc_data/nadc_data.zip` (`README.md:58`, frozen) once into `data/raw/legacy/<date>/`; sha256 into `scrape_meta.json["legacy"]`; reruns compare sha and skip. Reuse `fetch_zip` (`download_extracts.py:63`) and `DEFAULT_USER_AGENT`. Zip immutable; extract `nadc_tables.rtf` and the delimited files.
+- Verified live: plain unauthenticated GET, 22.5 MB zipped / 122.9 MB uncompressed, 64 pipe-delimited `.txt` files. `DATE_UPDATED.TXT` reads `Data last loaded: 2022-07-11 03:00:20` — genuinely frozen, matches the README's claim. Full findings, including the C-1/C-2 discovery below, in `docs/DATA_SOURCES.md`.
+- Date columns carry sentinel values (`12/31/9999`, `01/01/0001`, `01/01/0900` all seen) — `validate_legacy.py` should flag, not coerce, these.
 - `scripts/validate_legacy.py`: header gate like `validate.py`; exact-duplicate rows counted and dropped, not fatal.
 
 **1.2 `scripts/normalize_legacy.py` → `contributions_legacy.csv`, `expenditures_legacy.csv`**
@@ -148,9 +150,12 @@ Lives in `ne-campaign-finance/`.
 - `build_site.py`: new named columns `contrib_amt_legacy`, `contrib_recs_legacy`; inline totals `{modern:{}, pre2022:{}}`; rendered as two lines, never summed; `retrieval_dates()` adds a "pre-2022 data frozen by the state" note.
 
 **1.5 C-1 / C-2 statements of financial interest, `scripts/scrape_c1.py`**
-- Recon gate first: find where C-1s live (FirstTuesday search with the "Individual Supplemental Filer" quirk from `docs/DATA_SOURCES.md`, or NADC's own PDF listings). Record the finding in `DATA_SOURCES.md`.
+- **Recon done 2026-09-11 — splits this task in two, and the pre-2022 half no longer needs a scraper at all.** `nadc_data.zip` (1.1) already contains `formc1.txt` (81,804 rows, "Statement of Financial Interest" — filer name/office/address plus filing metadata), `formc1inc.txt` (10,604 rows, income sources/business associations/financial institutions/creditors/gifts, one row per item), `formc1prop.txt` (3 rows, real/other property — essentially unused), and `formc2.txt` (1,013 rows, "Potential Conflict of Interest Statement"). Full column list in `nadc_tables.rtf` / `docs/SCHEMA.md`. This is structured pipe-delimited data through the 2022-07-11 freeze date — no PDF, no OCR, normalize it the same way as every other legacy form in 1.2.
+  - **Privacy:** `formc1.txt`'s `Candidate Address` is a home street address in plaintext. Strip to city/state/zip before it reaches `canonical_entities.csv` or any display — `docs/PRIVACY.md` rule 2, non-negotiable.
+  - `Candidate ID` + `Date Received` is the join key across `formc1`/`formc1inc`/`formc1prop` per the schema doc's own note ("Use along with Date Received to link to FORM10").
+- **Post-2022-07-11 C-1/C-2 still needs the original plan**: find where they live now (FirstTuesday search with the "Individual Supplemental Filer" quirk from `docs/DATA_SOURCES.md`, or NADC's own PDF listings) — that recon has not been done yet.
 - Filer index: copy `lobby.py:Fetcher` (POST body in cache key `:133-141`) → `data/processed/c1_filings.csv` (`disclosure_id, year, filer_name_raw, filer_office, document_url, retrieved_at`). Every filing gets a link even before parsing.
-- PDF parsing (decided: parse): reuse `ne-contracts/scripts/extract_text.py`'s pypdf + pdfminer path (`:52-53`) for text-layer PDFs; for scanned ones run the OCR pilot ne-contracts scoped but never ran (`ne-contracts/README.md:1057`), on the C-1 corpus first since it is small. Output `financial_interests.csv` (`disclosure_id, item_type, counterparty_name_raw, detail, source_url, retrieved_at`) with the state's text verbatim. Raw PDFs immutable under `data/raw/c1/`.
+- PDF parsing (decided: parse, post-2022-07-11 filings only now): reuse `ne-contracts/scripts/extract_text.py`'s pypdf + pdfminer path (`:52-53`) for text-layer PDFs; for scanned ones run the OCR pilot ne-contracts scoped but never ran (`ne-contracts/README.md:1057`). Output `financial_interests.csv` (`disclosure_id, item_type, counterparty_name_raw, detail, source_url, retrieved_at`) with the state's text verbatim, `era` column matching 1.2/1.4's convention. Raw PDFs immutable under `data/raw/c1/`.
 - Hub: source `"disclosures"`, bit 32 (reserve 8 = SoS, 16 = FEC now). Counterparty orgs as role `counterparty`; filers as `entity_type="individual"` so they search but never auto-merge (`match.py:decide`).
 
 Tests: `test_normalize_legacy.py` (header gate, dedupe count, era, idempotency); `test_build_site.py` for the search index shape and `?q=`; `ne-connect/tests/test_era.py`; C-1 parser tests from trimmed HTML and a fixture PDF.

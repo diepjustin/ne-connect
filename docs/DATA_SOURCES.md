@@ -74,13 +74,35 @@ Status values: `shipped`, `in progress`, `planned`, `blocked`, `rejected`.
 
 ## Campaign finance — NADC (historical, pre-2022)
 
-- **Status:** planned (`PLAN.md` Phase 1)
-- **Access:** a bulk download of the older data based on the paper records, linked
-  from the NADC filings page. One of the files is `nadc_tables.rtf`, which documents
-  the table structure — read it and encode the field meanings in `docs/SCHEMA.md`.
+- **Status:** recon done, build planned (`PLAN.md` Phase 1)
+- **Access:** `https://nebraska.gov/nadc_data/nadc_data.zip` — no auth, plain GET,
+  22.5 MB zipped / 122.9 MB uncompressed, 64 pipe-delimited `.txt` files plus
+  `nadc_tables.rtf` (the schema doc) and `DATE_UPDATED.TXT` (`Data last loaded:
+  2022-07-11 03:00:20` in the copy fetched 2026-09-11 — confirms the file is
+  genuinely frozen, not still updating). Fetched and verified 2026-09-11:
+  sha256 `d08d542233...32dee225` (full digest in the recon session; re-derive
+  and pin it properly in `scrape_meta.json` when `download_legacy.py` lands).
 - **Search UI:** https://www.nebraska.gov/nadc/ccdb/search.cgi
 - **Gotcha:** the two eras have different form sets and different field names.
   Never silently concatenate them; carry an `era` column.
+- **Gotcha:** dates carry sentinel values (`12/31/9999`, `01/01/0001`,
+  `01/01/0900` all seen in `formc1.txt`'s `Date Received` column) — keep the
+  flag, don't coerce to a real date.
+- **Recon finding that changes the Phase 1.5 plan:** the zip already contains
+  `formc1.txt` (81,804 rows, "Statement of Financial Interest"),
+  `formc1inc.txt` (10,604 rows, income/business/creditor sources),
+  `formc1prop.txt` (3 rows, real/other property — sparsely filled), and
+  `formc2.txt` (1,013 rows, "Potential Conflict of Interest Statement") —
+  structured, pipe-delimited C-1/C-2 data through 2022-07-11. **1.5's PDF-parsing
+  plan is only needed for C-1/C-2 filings after that cutover date**; everything
+  before it can be normalized straight from this zip like every other legacy
+  form, no OCR or PDF text extraction involved. Update `PLAN.md` 1.5 to split
+  on the 2022 boundary before starting it.
+- **Privacy flag:** `formc1.txt`'s `Candidate Address` column is a **home
+  street address** in plaintext (e.g. `809 1ST AVENUE`), not an office address —
+  `docs/PRIVACY.md` rule 2 ("home addresses are never displayed") applies
+  directly; strip to city/state/zip before this reaches `canonical_entities.csv`
+  or any display, same as the modern contributor data already does.
 
 ### Validation set (not a primary source)
 
