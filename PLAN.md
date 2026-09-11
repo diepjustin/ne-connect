@@ -114,7 +114,7 @@ Split in two: **0A** can be done now while the Form B sweep runs; **0B** waits o
 - `ne-connect/README.md`: header from `entities_summary.json`; rewrite `:278-281`; document the header-driven index; link `docs/`.
 - `ne-lobbying/README.md`: actual positions / tests / legislature coverage / Form B and C status; describe the release backup.
 
-**0.14 First two workflows (pattern in Phase 4 notes below)**
+**0.14 First two workflows (pattern in Automation notes below)**
 - `ne-campaign-finance-daily.yml`: tests → restore cache (miss just redownloads) → `download_extracts.py` → `validate.py` shrink guard → `normalize.py` → save. Minutes.
 - `ne-lobbying-daily.yml`: nightly ~40 min: tests → restore `ne-lobbying-data-` with `lobbying-data-*` release fallback → `--aggregate` → `--entities` current year `--refresh` → `check_data.py` → save. Weekly Sunday ~4 h: `lobby.py --legislatures 109 --refresh-legislature` (new flag: drop that legislature's tokens, bypass cache). Monthly release upload. Historical legislatures never re-swept in CI.
 
@@ -154,7 +154,7 @@ Lives in `ne-campaign-finance/`.
 - Hub: source `"disclosures"`, bit 32 (reserve 8 = SoS, 16 = FEC now). Counterparty orgs as role `counterparty`; filers as `entity_type="individual"` so they search but never auto-merge (`match.py:decide`).
 
 Tests: `test_normalize_legacy.py` (header gate, dedupe count, era, idempotency); `test_build_site.py` for the search index shape and `?q=`; `ne-connect/tests/test_era.py`; C-1 parser tests from trimmed HTML and a fixture PDF.
-**1.6 Workflow**: extend `ne-campaign-finance-daily.yml` with the legacy sha check, `scrape_c1.py --new-only`, and `build_site.py`; then `ne-connect-nightly.yml` (see Phase 4 notes) since the hub now has two automated inputs plus contracts.
+**1.6 Workflow**: extend `ne-campaign-finance-daily.yml` with the legacy sha check, `scrape_c1.py --new-only`, and `build_site.py`; then `ne-connect-nightly.yml` (see Automation notes) since the hub now has two automated inputs plus contracts.
 Risks: rtf schema quality; legacy committee ids not joinable to modern; OCR quality on C-1 scans; `d/rows.json` size (measure; split by first letter if over ~5 MB).
 Effort: 8-11 days (legacy 3-4, search page 2, C-1 3-5).
 
@@ -192,7 +192,52 @@ Tests: header gate; NE-only filter; `sub_id` dedupe; person parse; FEC `IND` nev
 
 ---
 
-## Phase 4 — Automation notes (applied inside each phase above)
+## Phase 4 — Bill summarizer (`ne-bills/`)
+
+Not blocked by, and doesn't block, anything else — sequenced here mostly
+because it's the first place `CLAUDE.md`'s LLM rules get exercised for real
+rather than just specified. Enrichment on existing lobbying records, not a
+fourth pillar of the co-occurrence model: bills aren't organizations, so this
+adds no new source bit.
+
+**4.1 `scripts/scrape_bills.py`.** Pull bill text + metadata from
+`nebraskalegislature.gov/bills/view_bill.php?DocumentID=<id>`: bill number,
+session, title, introducer, current status, and the statement/text itself
+(often a PDF — reuse `ne-contracts/scripts/extract_text.py`'s pypdf/pdfminer
+path, same as the C-1 plan in Phase 1). Natural key `(session, bill_number)`;
+raw captures immutable, same pattern as every other source.
+
+**4.2 `scripts/summarize.py`.** One LLM call per bill, strictly extractive in
+spirit: the prompt receives only the bill text, must cite the specific
+section/line behind every claim, and returns a fixed shape — `summary`,
+`citations: [{quote, section}]`, `confidence`. A claim with no citation is
+dropped, not kept. Logged to `data/llm_log/` per `CLAUDE.md`'s "Where the LLM
+is allowed" rules — model, prompt hash, input record id, full response.
+Output `bill_summaries.csv`: `bill_id, session, summary, citations_json,
+model, prompt_hash, generated_at, source_url` — every summary carries its own
+provenance, same as `source_url`/`retrieved_at` everywhere else.
+
+**4.3 Hub join.** `ingest/sources.py` gains `load_bill_positions()` —
+lobbying positions already reference bill numbers (`ne-lobbying`'s
+`bill_positions.csv`), so this joins a principal's position to that bill's
+summary rather than introducing a new entity type. An entity's detail view
+can then show "opposed LB1042 — *machine-generated summary, not the bill
+text*" linked straight to the real bill.
+
+**Biggest risk:** a hallucinated or misleading summary reaching a reporter as
+if it were fact. Mitigate with the citation requirement above, a visible
+"AI-generated, verify against the bill" label rendered next to every summary
+(not a footnote), and holding it behind a toggle, off by default, until a
+sample has been spot-checked by a person.
+
+Tests: citation-required parser rejects an uncited claim; `llm_log` entry
+shape; join scoping (a bill with no lobbying position never surfaces).
+Effort: not yet scoped — recon (4.1) first to see what the bill-text access
+pattern actually looks like before estimating 4.2/4.3.
+
+---
+
+## Automation notes (applied inside each phase above)
 
 **Reusable pattern** from `ne-contracts-daily.yml` and `pages.yml`:
 1. Two UTC crons plus the gate step matching `TZ=America/Chicago date +%z` to the cron that fired (`:37-99`); never gate on wall-clock hour.
