@@ -151,12 +151,41 @@ redistributing any of it.**
 
 ## Statements of Financial Interest (Form C-1) and Conflicts (Form C-2)
 
-- **Status:** planned (`PLAN.md` Phase 1)
+- **Status:** recon done (both eras), build planned (`PLAN.md` Phase 1)
 - **Publisher:** NADC
-- **Access:** searchable on the NADC filings site. For C-2, individual filers are
-  found by typing the last name into the organization name box and selecting the
-  "Individual Supplemental Filer" type — an interface quirk worth encoding in the
-  scraper.
+- **Pre-2022-07-11 access:** already collected in bulk, structured, from
+  `nadc_data.zip` — see the historical campaign-finance entry above. No scraper
+  needed for this era.
+- **2018–present access (recon done 2026-09-11):** a dedicated public search
+  page — `https://nadc-e.nebraska.gov/PublicSite/SearchPages/Search.aspx
+  ?SearchTypeCodeHook=86C705B4-76BE-4FD9-B9A0-B607711F8A3A`, titled "Statements
+  of Financial Interests (C-1)". Confirmed live and reachable with no login.
+  - **No "Individual Supplemental Filer" trick needed here** — that quirk in
+    the original brief may describe finding an individual filer through the
+    *Committees/Businesses/Others* search, not this page; this page searches
+    C-1 filers directly by last name. Worth a quick check before scraping, but
+    not a blocker.
+  - Fields: Filing Year (dropdown, **2018–2026 only** — this online system does
+    not go back further; 2018–2022-07-11 overlaps the legacy zip's coverage,
+    so `scrape_c1.py` needs a dedup rule against `formc1.txt`, not just an era
+    split), Last Name, Filed Method (All/Electronic/Manual), Office/Position
+    Held, Office Sought, and Filing Reason checkboxes (candidate / annual
+    report / left office / newly appointed / **Supplemental Information** —
+    this last one is likely the actual C-2 / amendment marker).
+  - **Classic ASP.NET WebForms**, not a JSON API: `__VIEWSTATE` /
+    `__EVENTVALIDATION` / `__doPostBack`, confirmed via the page's own form
+    inputs and script. No `.ashx`/JSON endpoint found. Results grid is
+    paginated (page-size 10/25/50, "1 2 3 4 5 6 7 8 9 10 …" — many pages, no
+    visible total count) — same POST-body-in-cache-key pattern as
+    `ne-lobbying/scripts/lobby.py`'s `Fetcher` (1.5's plan to copy it was
+    right).
+  - **Every row's "View" link goes straight to a PDF**, not another search
+    hop: `../Reporting/DocumentImagePopup.aspx?PFD_FilingID=<guid>`. Verified
+    via `fetch()`: `content-type: application/pdf`, one example 2.8 MB. Worth
+    checking early in 1.5 whether these carry a text layer or are scanned
+    images — the file size and the "DocumentImagePopup" name both suggest the
+    latter, which would mean the OCR path (not just pypdf/pdfminer) is the
+    common case here, not the fallback.
 - **Why it matters:** C-1 lists officials' own business interests, income sources,
   and creditors. Cross-referenced against contracts, it is the sharpest edge in this
   whole tool.

@@ -153,9 +153,27 @@ Lives in `ne-campaign-finance/`.
 - **Recon done 2026-09-11 — splits this task in two, and the pre-2022 half no longer needs a scraper at all.** `nadc_data.zip` (1.1) already contains `formc1.txt` (81,804 rows, "Statement of Financial Interest" — filer name/office/address plus filing metadata), `formc1inc.txt` (10,604 rows, income sources/business associations/financial institutions/creditors/gifts, one row per item), `formc1prop.txt` (3 rows, real/other property — essentially unused), and `formc2.txt` (1,013 rows, "Potential Conflict of Interest Statement"). Full column list in `nadc_tables.rtf` / `docs/SCHEMA.md`. This is structured pipe-delimited data through the 2022-07-11 freeze date — no PDF, no OCR, normalize it the same way as every other legacy form in 1.2.
   - **Privacy:** `formc1.txt`'s `Candidate Address` is a home street address in plaintext. Strip to city/state/zip before it reaches `canonical_entities.csv` or any display — `docs/PRIVACY.md` rule 2, non-negotiable.
   - `Candidate ID` + `Date Received` is the join key across `formc1`/`formc1inc`/`formc1prop` per the schema doc's own note ("Use along with Date Received to link to FORM10").
-- **Post-2022-07-11 C-1/C-2 still needs the original plan**: find where they live now (FirstTuesday search with the "Individual Supplemental Filer" quirk from `docs/DATA_SOURCES.md`, or NADC's own PDF listings) — that recon has not been done yet.
-- Filer index: copy `lobby.py:Fetcher` (POST body in cache key `:133-141`) → `data/processed/c1_filings.csv` (`disclosure_id, year, filer_name_raw, filer_office, document_url, retrieved_at`). Every filing gets a link even before parsing.
-- PDF parsing (decided: parse, post-2022-07-11 filings only now): reuse `ne-contracts/scripts/extract_text.py`'s pypdf + pdfminer path (`:52-53`) for text-layer PDFs; for scanned ones run the OCR pilot ne-contracts scoped but never ran (`ne-contracts/README.md:1057`). Output `financial_interests.csv` (`disclosure_id, item_type, counterparty_name_raw, detail, source_url, retrieved_at`) with the state's text verbatim, `era` column matching 1.2/1.4's convention. Raw PDFs immutable under `data/raw/c1/`.
+- **2018-present C-1/C-2 recon also done 2026-09-11.** Live, no-login search page:
+  `nadc-e.nebraska.gov/PublicSite/SearchPages/Search.aspx?SearchTypeCodeHook=86C705B4-76BE-4FD9-B9A0-B607711F8A3A`.
+  Filing Year dropdown only goes back to 2018 — **2018 through 2022-07-11
+  overlaps `nadc_data.zip`**, so `scrape_c1.py` needs to dedup against
+  `formc1.txt` rather than just split cleanly on the freeze date; only ingest
+  online filings dated after it, or key on filer+year and let the newer source
+  win. Classic ASP.NET WebForms (`__VIEWSTATE`/`__doPostBack`, no JSON
+  endpoint), paginated grid — same POST-body-cache-key shape as `lobby.py`'s
+  `Fetcher`, confirming 1.5's original plan to copy it. **No "Individual
+  Supplemental Filer" checkbox on this page** — that quirk may belong to a
+  different search; verify before coding rather than assuming `DATA_SOURCES.md`'s
+  original note applies here unchanged.
+- **Every row's "View" link is a direct PDF**, not another hop:
+  `../Reporting/DocumentImagePopup.aspx?PFD_FilingID=<guid>`, confirmed via
+  `fetch()` — `content-type: application/pdf`, one sample 2.8 MB. Filer index
+  can therefore be built from the search grid alone: copy `lobby.py:Fetcher`
+  (POST body in cache key `:133-141`) → `data/processed/c1_filings.csv`
+  (`disclosure_id, year, filer_name_raw, filer_office, document_url,
+  retrieved_at`), with `document_url` already resolvable without a second
+  scrape. Every filing gets a link even before parsing.
+- PDF parsing (decided: parse, post-2022-07-11 filings only now): reuse `ne-contracts/scripts/extract_text.py`'s pypdf + pdfminer path (`:52-53`) for text-layer PDFs; for scanned ones run the OCR pilot ne-contracts scoped but never ran (`ne-contracts/README.md:1057`). **Check a handful of these PDFs for a text layer before committing to a pipeline** — the file size and the "DocumentImagePopup" name both suggest scanned images are the common case here, not the fallback, which would make OCR quality the actual bottleneck rather than a hedge. Output `financial_interests.csv` (`disclosure_id, item_type, counterparty_name_raw, detail, source_url, retrieved_at`) with the state's text verbatim, `era` column matching 1.2/1.4's convention. Raw PDFs immutable under `data/raw/c1/`.
 - Hub: source `"disclosures"`, bit 32 (reserve 8 = SoS, 16 = FEC now). Counterparty orgs as role `counterparty`; filers as `entity_type="individual"` so they search but never auto-merge (`match.py:decide`).
 
 Tests: `test_normalize_legacy.py` (header gate, dedupe count, era, idempotency); `test_build_site.py` for the search index shape and `?q=`; `ne-connect/tests/test_era.py`; C-1 parser tests from trimmed HTML and a fixture PDF.
