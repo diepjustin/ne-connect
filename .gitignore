@@ -10,3 +10,5 @@ data/*
 !data/manual/
 data/manual/*
 !data/manual/*.csv
+
+venv/

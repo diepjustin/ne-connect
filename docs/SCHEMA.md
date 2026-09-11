@@ -1,215 +1,91 @@
 # Schema
 
-Every table in `data/clean/` and `data/dist/`. Adding a column without updating this
-file is incomplete work.
+Every artifact this pipeline actually produces. Adding a column without
+updating this file is incomplete work.
 
-## Conventions
+No parquet, no DuckDB, no cents: everything here is plain CSV or JSON, and
+money is stored as a float dollar amount (`amount`), matching what each
+scraper source already publishes. This is a deliberate departure from the
+original design doc — the project never needed a columnar store at this scale,
+and floats-as-dollars avoids an extra conversion at every source boundary.
 
-- `*_id` columns are strings, stable across rebuilds, formed as
-  `<source>:<natural key>` (e.g. `contracts:PO-2026-004412`)
-- Money is integer **cents**. A column named `amount_cents` never holds dollars.
-- Dates are ISO-8601 `YYYY-MM-DD`. Timestamps are UTC with a `Z`.
-- `name_raw` holds the source's exact string. `name_key` holds the normalized form
-  from `resolve/normalize.py`. Both are always present; neither is ever edited by
-  hand.
-- `source_url` points at the primary record on the publisher's servers.
-- `retrieved_at` is when we captured it, not when the state published it.
+## `data/canonical_entities.csv`
 
----
+Written by `build/build_entities.py`. One row per (alias, source) — an entity
+spanning three spellings in two sources is several rows sharing `entity_id`.
 
-## Source tables
+| column | notes |
+|---|---|
+| `entity_id` | normalized key of the cluster's root; stable as long as the cluster doesn't change |
+| `canonical_name` | display name chosen for the whole cluster |
+| `alias` | the raw name as this source published it |
+| `normalized_key` | `resolve/normalize.py` output for `alias` |
+| `source` | `contracts`, `campaign_finance`, or `lobbying` |
+| `role` | vendor, contributor, principal, etc. — source-specific |
+| `entity_type` | `organization` or `individual` |
+| `records` | row count behind this alias in its source |
+| `amount` | dollar total behind this alias in its source |
+| `source_id` | the source's own identifier, where it publishes one (lobbying only, today) |
+| `source_url` | link to the primary record, or a search page where no per-record URL exists |
 
-### `contracts`
+## `data/hard_id_links.csv`, `data/match_candidates.csv`, `data/review_queue.csv`
 
-| column | type | notes |
-|---|---|---|
-| contract_id | str | `contracts:<document number>` |
-| document_number | str | as published |
-| vendor_name_raw | str | |
-| vendor_name_key | str | |
-| agency_name_raw | str | |
-| agency_name_key | str | |
-| doc_type | str | as published |
-| status | str | as published |
-| begin_date | date | nullable |
-| end_date | date | nullable |
-| amount_cents | int | nullable; may include amendments |
-| description | str | **verbatim state text; never rewritten** |
-| document_urls | list[str] | one record may publish several documents |
-| ends_before_begins | bool | data-quality flag, not a correction |
-| source_url | str | |
-| retrieved_at | timestamp | |
+All three are `Match.as_row()` from `resolve/match.py` (hard-id links use the
+`decision: "hard_id"` row shape from `resolve/authority.py` instead):
+`left_key, right_key, match_kind, score, key_weight, decision, reason,
+left_type, right_type`, plus `left_source`/`right_source`/`vendor_names`/
+`contributor_names`/money columns on the scored two (see
+`docs/ENTITY_RESOLUTION.md` for what feeds `decision`). `review_queue.csv` is
+ordered by dollars at stake, most first — it is meant to be worked top-down.
 
-### `contributions`
+## `data/manual/resolutions.csv`
 
-| column | type | notes |
-|---|---|---|
-| contribution_id | str | |
-| era | str | `pre2022` or `modern` — different form sets |
-| source_form | str | B1AB, B2A, B4A, B5, B72, B73 |
-| contributor_name_raw | str | |
-| contributor_name_key | str | |
-| contributor_type | str | individual, business, PAC, party, unknown |
-| contributor_city | str | nullable |
-| contributor_state | str | nullable |
-| contributor_zip | str | nullable |
-| recipient_committee_raw | str | |
-| recipient_committee_key | str | |
-| recipient_candidate_raw | str | nullable |
-| office_sought | str | nullable |
-| date | date | |
-| amount_cents | int | |
-| source_url | str | |
-| retrieved_at | timestamp | |
+The decision ledger (`resolve/resolutions.py`). Version-controlled, human-
+edited, **never machine-overwritten**; overrides the scorer permanently once a
+decision is recorded.
 
-Itemization threshold: contributions at or below $250 in a calendar year are not
-itemized. The UI must say so wherever totals appear.
+| column | notes |
+|---|---|
+| `pair_id` | stable hash of the sorted key pair |
+| `name_key_a` / `name_key_b` | the two normalized keys, sorted |
+| `decision` | `same` or `different` |
+| `decided_by` | a person's name or handle — never a model |
+| `decided_at` | ISO date |
+| `suggested_by` | what proposed the pair: `auto`, `review`, or a model name |
+| `suggested_score` | the score at the time of the decision |
+| `note` | free text |
 
-### `expenditures`
+## `data/entities_summary.json`
 
-Same shape as `contributions`, with `payee_*` in place of `contributor_*` and
-`source_form` in {B1D, B2B, B4B1}.
+Aggregate counts `build/build_entities.py` writes for the page header and
+README: entity count, alias count, hard-id-link count, awaiting-review count,
+human-decision count.
 
-### `lobby_registrations`
+## `d/entities.json`
 
-| column | type | notes |
-|---|---|---|
-| registration_id | str | |
-| session_year | int | |
-| principal_name_raw / _key | str | the client |
-| lobbyist_name_raw / _key | str | the registered lobbyist |
-| lobbyist_firm_raw / _key | str | nullable |
-| principal_address | str | |
-| compensated | bool | nullable |
-| source_url | str | |
-| retrieved_at | timestamp | |
+The lazily-fetched search index (`build/build_site.py`), fetched only once a
+search actually needs it — see that file's module docstring for why it's one
+file rather than chunked. Shape: `{"columns": [...], "rows": [[...], ...]}`.
+Header-driven so a later phase (SoS, FEC) can append a column without any
+existing reader having to change:
 
-### `lobby_positions`
+`name, bits, contract_amt, contract_recs, contrib_amt, contrib_recs,
+lobby_recs, lobby_id, aliases`
 
-From Statements of Activity. The highest-value table in the repo.
+`bits` is a source bitmask (`contracts=1, campaign_finance=2, lobbying=4`,
+see `SOURCE_BITS` in `build_site.py`). `aliases` lists the entity's *other*
+spellings, empty when there's only the one. `lobby_id` is the lobbying
+source's principal id, empty when lobbying isn't one of the entity's sources.
 
-| column | type | notes |
-|---|---|---|
-| position_id | str | |
-| session_year | int | |
-| bill_number | str | e.g. `LB1042` |
-| principal_name_key | str | |
-| lobbyist_name_key | str | |
-| position | str | support, oppose, or as published |
-| source_url | str | |
-| retrieved_at | timestamp | |
+## `index.html`'s inline payload
 
-### `lobby_expenses`
+The cross-source entities (2+ sources) only, rendered as full objects rather
+than the compact array above — small enough (a few hundred KB) that the extra
+verbosity costs nothing and buys richer per-alias detail (each alias's own
+`sources` and `url`) than the lazy index carries. Built by
+`build_site.py build_entities()`; see that function for the exact shape.
 
-Quarterly report totals by reporting category, keyed to principal or lobbyist and
-calendar quarter.
+## Dedup contract, by source
 
-### `salaries`
-
-| column | type | notes |
-|---|---|---|
-| salary_id | str | |
-| year | int | |
-| person_name_raw / _key | str | |
-| agency_name_raw / _key | str | |
-| job_title | str | |
-| salary_cents | int | |
-| source_url | str | |
-| retrieved_at | timestamp | |
-
-### `financial_interests`
-
-From Form C-1.
-
-| column | type | notes |
-|---|---|---|
-| disclosure_id | str | |
-| year | int | |
-| filer_name_raw / _key | str | |
-| filer_office | str | |
-| item_type | str | business interest, income source, creditor, real property |
-| counterparty_name_raw / _key | str | |
-| detail | str | verbatim |
-| source_url | str | |
-| retrieved_at | timestamp | |
-
-### `business_entities`
-
-From the Secretary of State, on-demand lookups only.
-
-| column | type | notes |
-|---|---|---|
-| sos_account_number | str | the state's unique ID |
-| entity_name_raw / _key | str | |
-| entity_type | str | LLC, corporation, trade name, etc. |
-| status | str | `Exists` means active |
-| registered_agent_raw / _key | str | nullable |
-| principal_office_address | str | nullable |
-| lookup_reason | str | which entity in which table triggered this lookup |
-| source_url | str | |
-| retrieved_at | timestamp | |
-
----
-
-## Resolution tables
-
-### `canonical_entities`
-
-| column | type | notes |
-|---|---|---|
-| entity_id | str | `ent:<slug>-<short hash>`; stable across rebuilds |
-| display_name | str | the name a reporter would recognize |
-| entity_kind | str | `org` or `person` |
-| primary_key_name | str | the normalized key that anchors the cluster |
-| source_count | int | how many distinct datasets this entity appears in |
-| created_at | timestamp | |
-
-### `entity_aliases`
-
-| column | type | notes |
-|---|---|---|
-| entity_id | str | |
-| name_raw | str | |
-| name_key | str | |
-| source | str | which table this spelling came from |
-| decided_by | str | `rule`, `human`, or `llm-proposed-human-approved` |
-| confidence | float | 0–1 |
-| reason | str | human-readable: "exact normalized name + same zip" |
-
-### `entity_appearances`
-
-Denormalized index the site queries. One row per (entity, source record).
-
-| column | type | notes |
-|---|---|---|
-| entity_id | str | |
-| source | str | contracts, contributions, lobby_registrations, ... |
-| record_id | str | the source table's primary key |
-| role | str | vendor, agency, contributor, recipient, principal, lobbyist, employee, filer, counterparty |
-| date | date | nullable |
-| amount_cents | int | nullable |
-| source_url | str | |
-
-### `connections`
-
-Precomputed pairs for the "co-occurring entities" panel.
-
-| column | type | notes |
-|---|---|---|
-| entity_a | str | |
-| entity_b | str | |
-| basis | str | shared_address, shared_registered_agent, same_recipient, vendor_and_donor, principal_and_vendor |
-| evidence_record_ids | list[str] | |
-| first_seen / last_seen | date | |
-
-`basis` values are neutral descriptions of the join, never characterizations.
-
----
-
-## Site artifacts (`data/dist/`)
-
-- `contracts.parquet`, `contributions.parquet`, ... — the clean tables
-- `entities.parquet`, `appearances.parquet`, `connections.parquet`
-- `status.json` — per-source last successful update, row count, and any current
-  failure; drives the staleness banner
-- `manifest.json` — build timestamp, git sha, per-file sha256
+See `PLAN.md`'s dedup table — it is the one place this is kept current, since
+it changes per source as each new phase lands.

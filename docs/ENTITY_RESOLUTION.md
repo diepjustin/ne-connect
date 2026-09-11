@@ -9,139 +9,126 @@ and it misses real ones, which is merely disappointing.
 **Bias strict.** A missed match costs a reporter a lead. A false match costs a
 correction.
 
-## The pipeline
+## The pipeline, as built
 
 ```
-raw names
-  -> normalize (deterministic, no network, no model)
-  -> block (group plausible candidates cheaply)
-  -> score (fuzzy comparison within blocks)
-  -> route by score band
-       >= 0.95  auto-accept, rule-decided
-       0.60-0.95 queue for review
-       <  0.60  discard
-  -> human decisions recorded in data/manual/resolutions.csv
-  -> assemble canonical entities
+raw names (per source)
+  -> normalize (resolve/normalize.py -- deterministic, no network, no model)
+  -> authoritative-id short-circuit (resolve/authority.py -- identity by
+     construction, no scoring, runs first so a later match attaches the group)
+  -> rare-token blocking + candidate pairs (resolve/index.py TokenIndex)
+  -> score (resolve/match.py) -> auto / review / reject
+  -> human decisions layered on top (resolve/resolutions.py Ledger,
+     data/manual/resolutions.csv)
+  -> canonical entities assembled (build/build_entities.py)
 ```
 
 ### 1. Normalize
 
-`resolve/normalize.py`. Must be pure: same input, same output, forever. No model
-call, no network, no randomness. Rules:
+`resolve/normalize.py`. Pure: same input, same output, forever, because
+`normalized_key` values are baked into published entity ids. Uppercases, folds
+accents, strips punctuation and legal suffixes, expands abbreviations, and
+applies `resolve/aliases.yml` (the Nebraska-specific table: NPPD/OPPD/LES/MUD,
+UNL/UNO/UNMC/UNK, NDOR→NDOT, etc.) last. People are parsed into last/first and
+handled separately. The exact rule set lives in the code, not here — this file
+would drift out of sync with it if it tried to duplicate the list.
 
-**Organizations**
-- Uppercase, fold accents, collapse whitespace
-- Strip punctuation except internal `&` (kept, then normalized to `AND`)
-- Strip legal suffixes: INC, LLC, LLP, LP, CO, CORP, CORPORATION, COMPANY, LTD,
-  PC, PLLC, LC, ASSOCIATION, ASSN, INCORPORATED
-- Expand abbreviations: INS→INSURANCE, MFG→MANUFACTURING, CONSTR→CONSTRUCTION,
-  SVCS/SERV→SERVICES, TECH→TECHNOLOGY, NATL→NATIONAL, MGMT→MANAGEMENT,
-  ENG→ENGINEERING, DIST→DISTRICT, CNTY→COUNTY
-- Handle `D/B/A` and `C/O`: split, keep both sides as separate candidate names
-- Apply `resolve/aliases.yml` last — the Nebraska-specific table
+### 2. Authoritative ids first
 
-**People**
-- Parse into last, first, middle, suffix; handle `LAST, FIRST M` and `FIRST M LAST`
-- Strip titles (MR, MRS, DR, SEN, REP, HON) and suffixes (JR, SR, II, III, IV)
-- Apply the nickname table (BOB↔ROBERT, BILL↔WILLIAM, ...)
-- Key is `LAST|FIRST_INITIAL` for blocking; full comparison happens in scoring
-
-### 2. Nebraska alias table
-
-`resolve/aliases.yml` is where local knowledge lives. Seed it with at least:
-
-- Utilities: NPPD / Nebraska Public Power District; OPPD / Omaha Public Power
-  District; LES / Lincoln Electric System; MUD / Metropolitan Utilities District
-- University: UNL, UNO, UNMC, UNK, NCTA, "Board of Regents of the University of
-  Nebraska", "University of Nebraska", "NU"
-- Agencies with renames: NDOR → NDOT (Roads → Transportation); NDEQ → NDEE
-  (Environmental Quality → Environment and Energy); HHS / DHHS
-- Colleges: Chadron State, Peru State, Wayne State, "Nebraska State College System"
-- NRDs: all 23, each with the full and short form
-
-Every alias entry carries a `source` note explaining why it's there. This file is
-public knowledge worth publishing on its own.
+`resolve/authority.py`. Some identity needs no scoring: when the Legislature
+assigns lobbying principal id 2590, every record carrying 2590 is that same
+registered principal by construction, whether the name on it is "Time Warner
+Cable" or a table cell truncated to "Associated Beverage Distributors of...".
+`short_circuit()` unions every key sharing a `(source, source_id)` pair before
+any scoring runs, so a single later name-match against any one alias attaches
+the whole group. Scope is precise: an id is authoritative *within its source
+only* — it says nothing about whether that principal is the same real-world
+company as a contract vendor with a similar name. Cross-source identity still
+requires matching, and still requires a person to accept it above the review
+floor.
 
 ### 3. Block
 
-Never compare every name to every name. Blocking keys, in order of preference:
-
-- Exact `name_key`
-- First token of `name_key` + zip
-- Soundex/metaphone of first two tokens
-- 3-gram overlap above a threshold (only for the residue)
+`resolve/index.py TokenIndex`. Comparing every vendor key to every contributor
+key is billions of pairs — not affordable and not necessary, since a real match
+shares at least one distinctive token. The index computes inverse document
+frequency per token so that sharing a rare token (KIEWIT, OLSSON, HUDL) counts
+far more than sharing a common one (SERVICES, COUNTY, NEBRASKA); tokens
+appearing in more than `COMMON_TOKEN_SHARE` (2%) of all keys are dropped from
+blocking entirely, and any single block is capped at `MAX_BLOCK_SIZE` (400)
+rather than allowed to explode. This deliberately favors rarity over token
+count: a real single-word Nebraska firm name should not be demoted just for
+being one token, the way an early version of this pipeline did.
 
 ### 4. Score
 
-`rapidfuzz` token-set ratio as the base, then adjust:
+`resolve/match.py score_pair()`. Two components, blended:
 
-| signal | effect |
-|---|---|
-| exact `name_key` match | +0.35 |
-| same zip | +0.15 |
-| same city + state | +0.10 |
-| shared street address | +0.20 |
-| one name contains the other as a full token sequence | +0.10 |
-| numbers differ (`HOLDINGS II` vs `HOLDINGS III`) | −0.40 |
-| one is a person key, other is an org key | −0.50 |
-| different state, no other corroboration | −0.15 |
+- **Weighted Jaccard** — token overlap between the two keys, weighted by each
+  shared token's IDF, so agreeing on "KIEWIT" outweighs agreeing on "SERVICES".
+- **Sequence similarity** — character-level ratio (`difflib.SequenceMatcher`),
+  to catch typos overlap alone would miss ("DEP0T" vs "DEPOT").
 
-Cap at 1.0. Always emit a `reason` string listing which signals fired — that string
-is displayed in the UI and it is what makes a reporter able to judge the match
-themselves.
+`score = 0.7 * jaccard + 0.3 * sequence`. Every score carries a `reason` string
+naming which shared token was rarest and what each component scored — that
+string is what's rendered in the UI, and it's what makes a match something a
+reporter can judge for themselves rather than take on faith.
 
 ### 5. Decide
 
-`data/manual/resolutions.csv` is the source of truth. It is version-controlled,
-human-edited, and **never machine-overwritten**. The pipeline may append proposals
-to `data/manual/proposals.csv`; a person moves rows into `resolutions.csv`.
+`decide()` in `resolve/match.py`:
 
-```csv
-name_key_a,name_key_b,decision,decided_by,decided_at,note
-AMERITAS LIFE INSURANCE,AMERITAS LIFE,same,jdiep,2026-09-14,same Lincoln address in both filings
-JOHNSON CONSTRUCTION,JOHNSON CONSTRUCTION OF OMAHA,different,jdiep,2026-09-14,different SOS account numbers
-```
+| band | condition |
+|---|---|
+| `reject` | score < `REVIEW_FLOOR` (0.60) |
+| `auto` | score >= `AUTO_ACCEPT_SCORE` (0.95) **and** the matched key's weight clears `AUTO_WEIGHT_MULTIPLE` (1.15) × the corpus's rarest-possible-token IDF **and** neither side is a person |
+| `review` | everything else in [0.60, 1.0] |
 
-`decision` is `same` or `different`. A `different` decision is as important as a
-`same` — it stops the matcher from re-proposing forever.
+`AUTO_WEIGHT_MULTIPLE` is expressed as a multiple of the corpus's own
+rarest-token IDF, not an absolute number, so the threshold doesn't silently
+drift as more sources are added and the corpus grows. It is also, by
+construction, always above 1.0 — a single-token key can never auto-merge no
+matter how rare that token is, because IDF alone cannot tell a distinctive
+brand from an uncommon English word (in the live data, "PAVERS" scores a
+*higher* IDF than "KIEWIT"). That is a real, accepted limitation: only a
+person separates the two.
 
-Decisions are transitive for `same` (union-find) but a single `different` between
-two members splits the cluster and raises a conflict the pipeline reports rather
-than resolves.
+**A person never auto-merges**, in either direction, at any score. Name
+collisions among people are common enough in Nebraska (common surnames, small
+towns, a $250 itemization threshold that thins the data further) that no score
+is trusted to decide it unattended — every match involving an `individual`
+lands in review, however high its score.
 
-### 6. LLM adjudication (Phase 9, optional)
+### 6. Human decisions
 
-For the 0.60–0.95 band only. The model receives both records with all their fields —
-never just the names — and must answer in this shape:
+`resolve/resolutions.py Ledger` reads `data/manual/resolutions.csv` —
+version-controlled, human-edited, **never machine-overwritten** — and applies
+`same`/`different` decisions on top of the automated bands before clusters are
+assembled. `different` matters as much as `same`: recording it stops the
+matcher from re-proposing the same pair on every run. Decisions are transitive
+for `same` (union-find, `resolve/resolutions.py UnionFind`); the pipeline does
+not currently detect or report a `different` verdict that would split an
+otherwise-unioned cluster.
 
-```json
-{
-  "verdict": "same | different | insufficient",
-  "confidence": 0.0,
-  "reasoning": "",
-  "distinguishing_evidence": ["field: value vs value"],
-  "what_would_settle_it": "the record or field a human should check"
-}
-```
+## Not yet built
 
-Rules:
-- The model's answer lands in `proposals.csv`, never in `resolutions.csv`.
-- `insufficient` is a first-class answer and the prompt must say so. A model that
-  never says "insufficient" is being pushed to guess.
-- Log model, prompt hash, input record IDs, and full response to `data/llm_log/`.
-- Anything the model touched is labeled in the UI as machine-proposed until a human
-  approves it.
+These were part of the original design and are worth keeping in mind, but
+nothing below has landed:
 
-## Person resolution is different
-
-Turn it on only in Phase 7, and read `docs/PRIVACY.md` first. Common Nebraska
-surnames plus $250 itemization thresholds plus small towns means confident person
-matching often isn't possible. When in doubt, show the reporter both records
-side by side and let them decide, rather than merging.
+- **LLM adjudication** for the review band. No phase in `PLAN.md` currently
+  schedules it. If it lands, the rule stands regardless of phase numbering: its
+  output goes to a proposals file, never straight into `resolutions.csv`, and
+  every touched entity is labeled machine-proposed until a person approves it.
+- **Person-name resolution proper** (nickname tables, `LAST|FIRST_INITIAL`
+  blocking, side-by-side review UI for people). Today a person is simply never
+  auto-merged; there is no dedicated person-matching pipeline yet.
+- A dedicated blocking fallback (soundex/metaphone, n-gram residue matching)
+  beyond the rare-token index above.
 
 ## Evaluating the resolver
 
-`tests/fixtures/name_variants.csv` holds hand-labeled pairs. The suite reports
-precision and recall separately. **Precision is the number that matters** — target
-above 0.99 on auto-accepted matches. Recall can be mediocre; the review queue exists
-to catch what the rules miss.
+`tests/fixtures/name_variants.csv` holds hand-labeled pairs, exercised by
+`tests/test_normalize.py` and `tests/test_join.py`. **Precision is the number
+that matters** for auto-accepted matches — a missed match costs a reporter a
+lead, a false one costs a correction. Recall can be mediocre; the review queue
+exists to catch what the rules miss.
