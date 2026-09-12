@@ -131,11 +131,11 @@ Effort: 5-7 working days plus ~18 h unattended sweeps.
 
 Lives in `ne-campaign-finance/`.
 
-**1.1 `scripts/download_legacy.py`** — recon done 2026-09-11, confirms the plan:
-- Fetch `nebraska.gov/nadc_data/nadc_data.zip` (`README.md:58`, frozen) once into `data/raw/legacy/<date>/`; sha256 into `scrape_meta.json["legacy"]`; reruns compare sha and skip. Reuse `fetch_zip` (`download_extracts.py:63`) and `DEFAULT_USER_AGENT`. Zip immutable; extract `nadc_tables.rtf` and the delimited files.
-- Verified live: plain unauthenticated GET, 22.5 MB zipped / 122.9 MB uncompressed, 64 pipe-delimited `.txt` files. `DATE_UPDATED.TXT` reads `Data last loaded: 2022-07-11 03:00:20` — genuinely frozen, matches the README's claim. Full findings, including the C-1/C-2 discovery below, in `docs/DATA_SOURCES.md`.
-- Date columns carry sentinel values (`12/31/9999`, `01/01/0001`, `01/01/0900` all seen) — `validate_legacy.py` should flag, not coerce, these.
-- `scripts/validate_legacy.py`: header gate like `validate.py`; exact-duplicate rows counted and dropped, not fatal.
+**1.1 `scripts/download_legacy.py`** — done 2026-09-12.
+- Fetches `nebraska.gov/nadc_data/nadc_data.zip` once into `data/raw/legacy/<date>/`, extracting only the 13 forms 1.2/1.5 need (not all 64 — see the script's docstring for the list and why); sha256 into `scrape_meta.json["legacy"]`; reruns compare sha and skip, a changed sha warns loudly and captures fresh rather than overwriting. Reuses `fetch_zip`/`DEFAULT_USER_AGENT` from `download_extracts.py`.
+- `scripts/validate_legacy.py`: header gate like `validate.py`, headers transcribed from a real pull. Exact-duplicate rows counted, not fatal (198-574 seen in the biggest forms — expected for paper records re-entered by hand). **New finding while building this**: six of the thirteen forms (formb2a, formb4a, formb72, formb73, formb2b, formb4b1) have every row one field short of the header — "Report ID" is essentially never populated and the export drops it rather than emitting an empty field, confirmed by direct byte inspection. Also counted, not fatal, but `normalize_legacy.py` (1.2) needs to read these six positionally rather than with a strict `dict(zip(header, row))`.
+- Ran end-to-end against the live zip: all 13 forms extract and validate cleanly, rerun correctly skips on unchanged sha256. 57 tests (14 new, `ne-campaign-finance`).
+- Date columns carry sentinel values (`12/31/9999`, `01/01/0001`, `01/01/0900` all seen) — not yet enforced as a validator warning; worth adding when 1.2 starts parsing dates.
 
 **1.2 `scripts/normalize_legacy.py` → `contributions_legacy.csv`, `expenditures_legacy.csv`**
 - Columns of `contributions.csv` (`normalize.py:198-208`) plus `era="pre2022"`, `source_form`. `receipt_id = legacy:<form>:<key>`; `org_id = legacy:<committee id>`. `source_url` = legacy search UI. Never writes into `contributions.csv`. Byte-identical on rerun (test).
