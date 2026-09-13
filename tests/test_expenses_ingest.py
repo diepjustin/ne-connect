@@ -66,3 +66,21 @@ def test_missing_sweep_degrades_to_no_dollars(tmp_path):
     principals = load_lobbying_principals(_dir(tmp_path, expenses=False))
     assert principals["2446"].total_amount == 0.0
     assert principals["2446"].record_count == 2
+
+
+DUPLICATED_POSITIONS = """legislature,bill,lobbyist,lobbyist_id,principal,principal_id,position,registration_id,name_truncated
+109,LB1,"Doe, Jane",11,Example Association,2446,Support,900,False
+109,LB1,"Doe, Jane",11,Example Association,2446,Support,900,False
+109,LB2,"Doe, Jane",11,Example Association,2446,Oppose,901,False
+"""
+
+
+def test_duplicate_source_rows_are_not_double_counted(tmp_path):
+    """The Legislature's own pages list some registrations twice (see
+    ne-lobbying's check_data.py, which defines a position by the same key:
+    legislature, bill, registration_id, position). A byte-identical repeat
+    from the source is not a second position."""
+    (tmp_path / "bill_positions.csv").write_text(DUPLICATED_POSITIONS)
+    (tmp_path / "principal_details.csv").write_text(DETAILS)
+    principals = load_lobbying_principals(tmp_path)
+    assert principals["2446"].record_count == 2  # not 3

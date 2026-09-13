@@ -226,6 +226,13 @@ def load_lobbying_principals(data_dir: Path = None):
     if not positions_path.exists():
         return principals
 
+    # The Legislature's own pages list some registrations twice (verified
+    # against a cached page -- see ne-lobbying's check_data.py, which defines
+    # a position's natural key the same way). Counting every raw row would
+    # inflate a principal's displayed position count by however many of its
+    # own rows are byte-identical repeats -- 15% of all rows sitewide.
+    seen_positions = set()
+
     with positions_path.open(encoding="utf-8", newline="") as fh:
         for row in csv.DictReader(fh):
             source_id = (row.get("principal_id") or "").strip()
@@ -257,7 +264,14 @@ def load_lobbying_principals(data_dir: Path = None):
                 # Spending is per principal, not per position row, so it is set
                 # once when the party is created rather than accumulated.
                 party.total_amount = expenses.get(source_id, 0.0)
-            party.record_count += 1
+
+            position_key = (
+                row.get("legislature"), row.get("bill"), row.get("registration_id"),
+                row.get("position"),
+            )
+            if position_key not in seen_positions:
+                seen_positions.add(position_key)
+                party.record_count += 1
             lobbyist = (row.get("lobbyist") or "").strip()
             if lobbyist:
                 party.counterparties.add(lobbyist)
