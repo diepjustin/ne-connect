@@ -1,4 +1,7 @@
-from build_site import INDEX_COLUMNS, build_full_index
+import json
+
+import build_site
+from build_site import INDEX_COLUMNS, build_full_index, retrieval_dates
 
 
 def _rows(*entities):
@@ -52,3 +55,35 @@ def test_non_lobbying_entity_has_empty_lobby_id():
     index = build_full_index(rows)
     lobby_id_col = INDEX_COLUMNS.index("lobby_id")
     assert index[0][lobby_id_col] == ""
+
+
+def test_retrieval_dates_ignores_non_dataset_shaped_keys(tmp_path, monkeypatch):
+    """download_legacy.py's "legacy" key in ne-campaign-finance's
+    scrape_meta.json is {source_url, sha256, retrieved_at, path, members} --
+    not {year: [{"run_date": ...}]} like the modern extract datasets. This
+    used to crash retrieval_dates() with "string indices must be integers"
+    the moment "legacy" existed alongside "contributions"/"expenditures"."""
+    root = tmp_path / "ne-connect"
+    root.mkdir()
+    finance_dir = tmp_path / "ne-campaign-finance" / "data"
+    finance_dir.mkdir(parents=True)
+    (finance_dir / "scrape_meta.json").write_text(
+        json.dumps(
+            {
+                "contributions": {"2026": [{"run_date": "2026-09-08"}]},
+                "expenditures": {"2026": [{"run_date": "2026-09-09"}]},
+                "legacy": {
+                    "source_url": "https://nebraska.gov/nadc_data/nadc_data.zip",
+                    "sha256": "abc123",
+                    "retrieved_at": "2026-09-12",
+                    "path": "raw/legacy/2026-09-12",
+                    "members": {"formc1.txt": 12345},
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(build_site, "ROOT", root)
+
+    dates = retrieval_dates()
+
+    assert dates["campaign_finance"] == "2026-09-09"

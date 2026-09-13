@@ -60,17 +60,17 @@ Split in two: **0A** can be done now while the Form B sweep runs; **0B** waits o
 
 ### 0A — while the sweep runs
 
-**0.1 Transient network errors get the RateLimited treatment**
+**0.1 Transient network errors get the RateLimited treatment** — done.
 - `lobby.py`: add `class Unreachable(RateLimited)` beside `RateLimited` (`:112`). Every existing `except RateLimited` (`lobby.py:438`, `:492`, `expenses.py:225`) then inherits stop-cleanly-save-resume.
 - `Fetcher._fetch` (`:161-178`): wrap `session.get/post` in `try/except (requests.ConnectionError, requests.Timeout)`; back off `delay * 2**(attempt+1)`, count in `network_retries`, continue; after `MAX_RETRIES` raise `Unreachable`.
 - Tests (`ne-lobbying/tests/test_lobby.py`): stub session raises twice then succeeds → page returned, `network_retries == 2`; always raises → `Unreachable`, is-a `RateLimited`.
 
-**0.2 Completion marker and exit codes**
+**0.2 Completion marker and exit codes** — done. (`sweep_all.sh`'s exit-code handling was found overnight to only halt the chain on 130, letting a crashed stage silently continue as if complete — see `ne-lobbying` commit `3bb62a8`: `stop_if_interrupted()` now flags any non-zero, non-interrupt exit too.)
 - `scrape_positions` (`:377-456`): `finished=True` only when the loop exits normally; `finally` writes `progress["complete"]` and `progress["legislatures_requested"]`. `main()` (`:507-540`) returns 0 if complete, 2 otherwise. Same in `expenses.py scrape_entities` (`:185-234`) with `progress["complete"] = {"B":…, "C":…}`.
 - `sweep_all.sh`: replace the pid-wait (`:19-26`) with a bounded retry loop (≤12 attempts, `sleep 300`) that reruns `lobby.py --all --prefixes LB LR --delay 2.0` until `complete` is true; same loop around `--entities` (`:44`). Keep `set -u`; no `set -e`.
 - Test: sibling of `test_progress_round_trips` (`test_lobby.py:130`) for `complete` false after a simulated `RateLimited`, true after a clean `--max-number 2`.
 
-**0.3 Idempotent statewide totals**
+**0.3 Idempotent statewide totals** — done.
 - `write_rows`: add `mode` (default `"a"`); `scrape_aggregate` passes `"w"`. One-time repair: rerun `--aggregate` (all 24 responses cached → zero requests); verify 408 rows.
 - New `ne-lobbying/scripts/check_data.py` fails on duplicate keys in any expenses CSV; chain runs it before `build_site.py`.
 - Test: `scrape_aggregate` twice against a stub fetcher → one pass's row count.

@@ -80,7 +80,16 @@ def retrieval_dates():
     finance_meta = ROOT.parent / "ne-campaign-finance" / "data" / "scrape_meta.json"
     if finance_meta.exists():
         runs = json.loads(finance_meta.read_text())
-        stamps = [r["run_date"] for years in runs.values() for rs in years.values() for r in rs]
+        # Only the modern bulk-extract datasets are {year: [{"run_date": ...}]}
+        # shaped (download_extracts.py's DATASETS). "legacy" (download_legacy.py)
+        # is a single frozen capture with its own shape and is read separately,
+        # not folded into this loop.
+        stamps = [
+            r["run_date"]
+            for dataset in ("contributions", "expenditures")
+            for rs in runs.get(dataset, {}).values()
+            for r in rs
+        ]
         dates["campaign_finance"] = max(stamps) if stamps else ""
 
     lobbying_meta = ROOT.parent / "ne-lobbying" / "data" / "scrape_progress.json"

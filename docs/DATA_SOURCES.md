@@ -179,13 +179,21 @@ redistributing any of it.**
     visible total count) — same POST-body-in-cache-key pattern as
     `ne-lobbying/scripts/lobby.py`'s `Fetcher` (1.5's plan to copy it was
     right).
-  - **Every row's "View" link goes straight to a PDF**, not another search
-    hop: `../Reporting/DocumentImagePopup.aspx?PFD_FilingID=<guid>`. Verified
-    via `fetch()`: `content-type: application/pdf`, one example 2.8 MB. Worth
-    checking early in 1.5 whether these carry a text layer or are scanned
-    images — the file size and the "DocumentImagePopup" name both suggest the
-    latter, which would mean the OCR path (not just pypdf/pdfminer) is the
-    common case here, not the fallback.
+  - **Every row's "View" link goes straight to a PDF** for most rows, not
+    another search hop: `../Reporting/DocumentImagePopup.aspx?PFD_FilingID=<guid>`.
+    A minority of rows route through `__doPostBack` instead of a direct GUID
+    link — not yet explained; worth checking in 1.5 whether that's electronic
+    filings rendering inline HTML rather than a scanned PDF.
+  - **Text-layer check done 2026-09-13, confirmed via `pypdf`**: sampled 4 real
+    filings from the 2023 grid (GUIDs `a4f60783-2968-4734-93e1-2419010c0a9f`,
+    `aaf0ba9f-3ebb-4a16-a753-d0c9c26ec3fb`, `71393121-fa34-4cc1-b0c1-4e34fa5199de`,
+    `45b456b0-60aa-4e4f-8bd9-9d1ace264662`; 345 KB-543 KB each). **3 of 4 (75%)
+    extract zero characters — scanned images, no text layer at all.** Only one
+    had a real text layer (4,347 chars from its first two pages). This
+    confirms the suspicion: for 1.5, OCR is the common path, not a fallback
+    for the occasional scanned outlier — plan the pipeline (and its review
+    cost) around that from the start rather than treating pypdf/pdfminer as
+    the primary path with OCR as a hedge.
 - **Why it matters:** C-1 lists officials' own business interests, income sources,
   and creditors. Cross-referenced against contracts, it is the sharpest edge in this
   whole tool.
