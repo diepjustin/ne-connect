@@ -1,12 +1,15 @@
 # Nebraska Public Records Hub (`ne-connect`)
 
-**Status: phases 0–2 built, reconciled to the handoff spec in `new/`, and the
-index now covers every entity rather than only the matched ones.** 86 tests.
-Three sources in: contracts, campaign finance and lobbying. **779 canonical
-entities**, of which **37 appear in all three sources** — a state vendor who donates
-*and* lobbies — plus **2,138 pairs awaiting human review**, ordered by money at
-stake. `data/manual/resolutions.csv` is the decision ledger and is currently
-**empty**; no human has ruled on anything yet.
+**Status: phases 0–2 built, lobbying fully swept (all 7 legislatures, positions
+and Form B/C expenses), and the index covers every entity rather than only
+the matched ones.** 99 tests. Three sources in: contracts, campaign finance
+and lobbying. **928 entities appear in more than one source**, of which **56
+appear in all three** — a state vendor who donates *and* lobbies — plus
+**2,254 pairs awaiting human review**, ordered by money at stake.
+`data/manual/resolutions.csv` is the decision ledger and is currently
+**empty**; no human has ruled on anything yet. Full numbers in
+`docs/SCHEMA.md`; the resolution formula in `docs/ENTITY_RESOLUTION.md`; what
+each source actually covers in `docs/DATA_SOURCES.md`.
 
 Live at **https://diepjustin.github.io/ne-connect/**.
 
@@ -97,8 +100,8 @@ Tier 1 — bulk-downloadable, build v1 on these:
 |---|---|---|
 | State contracts | **done** (`ne-contracts`) | 739,605 records, 92 entities |
 | NADC campaign finance 2022+ | **done** (`ne-campaign-finance`) | 207,259 rows, 5 tables |
-| NADC campaign finance pre-2022 | not started | state zip + OWH parser; different schema and IDs |
-| Lobbyist registration & activity | **positions done; expenses wired, sweep queued** | `../ne-lobbying/` — Support/Oppose/Neutral per lobbyist × principal × bill, with stable ids. The only source tying a private interest to a specific bill |
+| NADC campaign finance pre-2022 | **download + validation done; normalization pending human review** | `nadc_data.zip`, 13 forms; three real per-row classification calls (independent expenditures mixed into a contributions form, loans mixed into a contributions form, an undocumented code) deliberately left for a human rather than guessed overnight — see `PLAN.md` 1.2 |
+| Lobbyist registration & activity | **done** (`../ne-lobbying/`) | 291,078 positions across all 7 legislatures (109 back through 105), Support/Oppose/Neutral per lobbyist × principal × bill with stable ids, plus Form B/C expense totals. The only source tying a private interest to a specific bill |
 | State salary roster | not started | DAS, annual |
 | NADC C-1 financial disclosures | not started | businesses, income sources, creditors — genuinely under-read |
 
@@ -241,28 +244,35 @@ ne-connect/
 ### Why the payload is split the way it is
 
 `build_entities.py` emits **every** entity, not only the ones that matched across
-sources. Before that it emitted 779 of 80,066 names, so the hub was a connections
-list rather than a search: look up a state vendor that never donated and it
-returned nothing, though `ne-contracts` holds all of its records.
+sources — 79,351 of them as of the latest rebuild. Before that it emitted only the
+matched ones, so the hub was a connections list rather than a search: look up a
+state vendor that never donated and it returned nothing, though `ne-contracts`
+holds all of its records.
 
-The page therefore ships in two pieces:
+The page therefore ships in two pieces, and both are **header-driven**:
+`d/entities.json` is `{"columns": [...], "rows": [[...], ...]}` rather than bare
+positional arrays, so a later phase (a new source, a new derived column) adds a
+named column without touching the JS that reads it — see `build_full_index()` /
+`widen()` in `build/build_site.py`.
 
-- `index.html` inlines the ~850 entities that appear in more than one record set.
+- `index.html` inlines the 928 entities that appear in more than one record set.
   They are the point of the hub and they open instantly.
-- `d/entities.json` holds all 78,968, fetched the first time someone searches.
+- `d/entities.json` holds all 79,351, fetched the first time someone searches
+  (3.61 MB raw, comfortably under the 4 MB budget `PLAN.md` 0.6 set).
 
-That file is committed rather than built in CI, because ne-connect derives from
-three sibling projects whose data is not in git — CI has nothing to rebuild it
-from. It is one file, so a rebuild produces one delta rather than thousands.
+Both files are committed directly rather than built in CI, because ne-connect
+derives from three sibling projects whose data is not in git — CI has nothing to
+rebuild it from. Each is one file, so a rebuild produces one delta rather than
+thousands.
 
-Chunking it further was considered and measured away: 2.97 MB raw is 0.86 MB over
-the wire once Pages gzips it, about what the page already weighed, and a
-three-character prefix scheme would have produced 5,331 files to save nothing.
+Chunking `d/entities.json` further was considered and measured away: the raw size
+is about what the page already weighed, and a three-character prefix scheme would
+have produced thousands of files to save nothing.
 
-`build_site.py` embeds the whole entity table inline — 529 entities and their aliases
-come to about 230 KB, against `ne-contracts`' 6.85 MB page, because this project
-publishes *entities* rather than the millions of transactions behind them. Small enough
-that `index.html` is committed directly and needs no chunked payload or CI artifact.
+`build_site.py` embeds the 928 cross-source entities and their aliases inline —
+against `ne-contracts`' 6.85 MB page, because this project publishes *entities*
+rather than the millions of transactions behind them. Small enough that
+`index.html` is committed directly and needs no CI artifact.
 
 The page prints the pending-review and human-decision counts beside the entity count
 rather than in a footnote. Every figure on it comes from a machine match that **no
@@ -275,12 +285,17 @@ their own repos, READMEs and caveats, and each publishes clean tables. `ne-conne
 the per-source caveats — which are where most of the journalism value lives — stay
 attached to the data they describe instead of being flattened into one hub.
 
-**Publishing** follows `ne-contracts`: GitHub Actions builds the payload into the Pages
-artifact, nothing large is committed.
+**Publishing:** `index.html` and `d/entities.json` are committed directly (see "Why
+the payload is split the way it is" above) and served by GitHub Pages from the repo
+root — no CI build step for the payload itself, since the sibling projects' data
+isn't in this repo's git history for a workflow to rebuild from. `ne-connect-nightly.yml`
+(planned, `PLAN.md` 0.14) restores each sibling's published output and reruns the two
+build scripts, then commits the result.
 
-**Connections panel** precomputed in CI: per canonical entity, a list of (source, role,
-count, $ total, date range); entities in ≥2 sources get a badge; a sortable
-"most connected" leaderboard for browsing.
+**Connections panel:** per canonical entity, a list of (source, role, count, $ total,
+date range); entities in ≥2 sources get a badge; row expansion shows every alias and
+which source each came from (see the "Why these records are grouped" detail on any
+row in the live page).
 
 **Show your work on every row** — source, retrieval date, original URL, normalization
 applied. Keep this; it's what makes the tool quotable.
@@ -293,9 +308,9 @@ Realistic, and ordered so something useful exists early.
 |---|---|---|
 | 0 | ~~**Vendors who are also donors.**~~ **Done** — 458 strong matches, `data/vendor_donor_report.md`. | done |
 | 1 | ~~Normalization + blocking + scoring; `resolutions.csv` and the review loop; `canonical_entities`.~~ **Done.** | done |
-| 2 | Lobbyist scraper — **bill positions done** (`../ne-lobbying/`); Form B/C expenses and a full historical sweep remain. | part done |
+| 2 | Lobbyist scraper — **done** (`../ne-lobbying/`): all 7 legislatures, positions and Form B/C expenses. | done |
 | 3 | Search UI: one box, grouped results, entity pages, CSV + case-file export. | 1–2 weeks |
-| 4 | Pre-2022 NADC; C-1 disclosures; salary roster. | 2–3 weeks |
+| 4 | Pre-2022 NADC — **download + validation done**, normalization pending human review of the classification calls in `PLAN.md` 1.2; C-1 disclosures — recon done, PDF text-layer confirmed mostly scanned (OCR path); salary roster not started. | in progress |
 | 5 | SoS lookups for matched entities only; auditor findings; votes. | open |
 
 **Phase 0 is the whole bet in miniature.** If the vendor↔donor join produces a list
