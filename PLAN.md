@@ -113,9 +113,13 @@ and 10d)"`, matching `sources.py`'s prefix check and the test fixture. No fix ne
 - `ne-connect/README.md`: header from `entities_summary.json`; rewrite `:278-281`; document the header-driven index; link `docs/`.
 - `ne-lobbying/README.md`: actual positions / tests / legislature coverage / Form B and C status; describe the release backup.
 
-**0.14 First two workflows (pattern in Automation notes below)**
-- `ne-campaign-finance-daily.yml`: tests → restore cache (miss just redownloads) → `download_extracts.py` → `validate.py` shrink guard → `normalize.py` → save. Minutes.
-- `ne-lobbying-daily.yml`: nightly ~40 min: tests → restore `ne-lobbying-data-` with `lobbying-data-*` release fallback → `--aggregate` → `--entities` current year `--refresh` → `check_data.py` → save. Weekly Sunday ~4 h: `lobby.py --legislatures 109 --refresh-legislature` (new flag: drop that legislature's tokens, bypass cache). Monthly release upload. Historical legislatures never re-swept in CI.
+**0.14 First two workflows (pattern in Automation notes below)** — done. Both
+verified green on `workflow_dispatch`: [`ne-campaign-finance` run](https://github.com/diepjustin/ne-campaign-finance/actions/runs/34889845303)
+(29s), [`ne-lobbying` run](https://github.com/diepjustin/ne-lobbying/actions/runs/34889922350)
+(1m18s, including the release-fallback restore path on the expected first-run
+cache miss). `--refresh-legislature` (`lobby.py`) shipped for the weekly step.
+- `ne-campaign-finance-daily.yml`: tests → restore cache (miss just redownloads) → `download_extracts.py` → `validate.py` shrink guard → `normalize.py` → save.
+- `ne-lobbying-daily.yml`: nightly → restore `ne-lobbying-data-` with `lobbying-data-*` release fallback → `--aggregate` → `--entities` current year `--refresh` → `check_data.py` → save. Weekly (Sundays): `lobby.py --legislatures 109 --refresh-legislature`. Monthly (1st): backup release. Historical legislatures never re-swept in CI. Weekly/monthly steps correctly no-op'd on this (Monday) test run.
 
 ### Phase 0 verification
 - `ne-lobbying`: `pytest tests -q`; 408 unique statewide rows; kill a `--max-number 3` run, confirm `complete:false`, rerun continues; `check_data.py` clean.
