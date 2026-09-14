@@ -98,8 +98,9 @@ Split in two: **0A** can be done now while the Form B sweep runs; **0B** waits o
 
 ### 0B — after the sweeps
 
-**0.4 Form C reaches the hub**
-- After the first `C/` tokens land, open one cached Form C response and confirm the total label matches the `"11."` prefix in `sources.py:175` and the fixture `tests/test_expenses_ingest.py:22-27`; fix both together if not.
+**0.4 Form C reaches the hub** — done. Verified against the real `expenses_principal.csv`
+(22,289 rows): every "11." row reads exactly `"11. Total (Sum of 2, 3d, 4, 5, 6, 7, 8, 9d,
+and 10d)"`, matching `sources.py`'s prefix check and the test fixture. No fix needed.
 
 **0.5 Lobbying backup: GitHub Release, not commits**
 - Positions will reach ~15-20 MB and are appended every run; committing repeats the 546 MB history problem. Use the `extraction-data-*` release pattern from `pages.yml`. Now: gzip `data/*.csv` + progress JSONs, `gh release create lobbying-data-<date>`. `git add ne-lobbying/data/expenses_progress.json` (resume state, 28 KB).
@@ -107,10 +108,9 @@ Split in two: **0A** can be done now while the Form B sweep runs; **0B** waits o
 **0.8 Bounded review-queue slice (~2 h)**
 - Decide the 158 `identical_key` pairs plus the top 50 fuzzy pairs by dollars with `build/review.py --same/--different --by jdiep --note`. Optional `--next N --kind identical_key` helper; write path unchanged. Defer the remaining ~1,900.
 
-**0.9 Rebuild and commit**
-- `build/build_entities.py` (~105 s) → `build/build_site.py` → commit `index.html`, `d/entities.json`, `data/manual/resolutions.csv`.
+**0.9 Rebuild and commit** — done (`4781e1a`). `resolutions.csv` unchanged (still empty; no human decisions yet, see 0.8).
 
-**0.10 READMEs with real numbers**
+**0.10 READMEs with real numbers** — done.
 - `ne-connect/README.md`: header from `entities_summary.json`; rewrite `:278-281`; document the header-driven index; link `docs/`.
 - `ne-lobbying/README.md`: actual positions / tests / legislature coverage / Form B and C status; describe the release backup.
 
