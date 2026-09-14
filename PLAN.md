@@ -102,8 +102,7 @@ Split in two: **0A** can be done now while the Form B sweep runs; **0B** waits o
 (22,289 rows): every "11." row reads exactly `"11. Total (Sum of 2, 3d, 4, 5, 6, 7, 8, 9d,
 and 10d)"`, matching `sources.py`'s prefix check and the test fixture. No fix needed.
 
-**0.5 Lobbying backup: GitHub Release, not commits**
-- Positions will reach ~15-20 MB and are appended every run; committing repeats the 546 MB history problem. Use the `extraction-data-*` release pattern from `pages.yml`. Now: gzip `data/*.csv` + progress JSONs, `gh release create lobbying-data-<date>`. `git add ne-lobbying/data/expenses_progress.json` (resume state, 28 KB).
+**0.5 Lobbying backup: GitHub Release, not commits** — done. [`lobbying-data-2026-09-14`](https://github.com/diepjustin/ne-lobbying/releases/tag/lobbying-data-2026-09-14): all `data/*.csv` + both progress JSONs, gzipped, 2.8 MB total (25 MB uncompressed). Backup only — not yet consumed by any workflow; `.github/workflows/ne-lobbying-daily.yml` (0.14) is the first consumer, per the `pages.yml` pattern.
 
 **0.8 Bounded review-queue slice (~2 h)**
 - Decide the 158 `identical_key` pairs plus the top 50 fuzzy pairs by dollars with `build/review.py --same/--different --by jdiep --note`. Optional `--next N --kind identical_key` helper; write path unchanged. Defer the remaining ~1,900.
