@@ -21,6 +21,7 @@ import csv
 import json
 import re
 import sys
+from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
@@ -214,16 +215,17 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
     _write(out_dir / "review_queue.csv", review)
     _write(out_dir / "canonical_entities.csv", entities)
 
-    multi_source = sum(
-        1
-        for members in clusters.groups().values()
-        if len({
-            source
-            for member in members
-            for source, keyed in (("c", vendors), ("f", contributors), ("l", lobbying))
-            if keyed.get(member)
-        }) > 1
-    )
+    # Counted from the entities actually written above, not from clusters.groups()
+    # directly: a singleton key -- one never explicitly unioned with anything,
+    # often because IDF blocking never generated it as a candidate pair -- can
+    # still span two sources if the identical normalized key happens to exist in
+    # both (the entity-building loop above checks every source dict for every
+    # member, clustered or not). Scanning clusters.groups() alone missed those
+    # and undercounted this figure by ~200 against the real canonical_entities.csv.
+    entity_sources = defaultdict(set)
+    for row in entities:
+        entity_sources[row["entity_id"]].add(row["source"])
+    multi_source = sum(1 for sources in entity_sources.values() if len(sources) > 1)
 
     summary = {
         "built": date.today().isoformat(),
