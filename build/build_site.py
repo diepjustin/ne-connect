@@ -509,6 +509,17 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
   .detail h4:first-child {{ margin-top: 0; }}
   .alias {{ padding: 2px 0; color: var(--muted); }}
   .alias b {{ color: var(--text); font-weight: 500; }}
+  .txns-slot table {{
+    width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 4px;
+  }}
+  .txns-slot th, .txns-slot td {{
+    text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border);
+  }}
+  .txns-slot td.n {{ text-align: right; font-variant-numeric: tabular-nums; }}
+  .era-tag {{
+    font-size: 9.5px; text-transform: uppercase; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 3px; padding: 0 3px; margin-left: 4px;
+  }}
   .hint {{ color: var(--muted); font-size: 13px; padding: 14px 4px; }}
   footer {{
     max-width: 900px; margin: 0 auto; padding: 20px; border-top: 1px solid var(--border);
@@ -705,6 +716,7 @@ function figures(e) {{
   }}).join('');
 }}
 
+let renderedRows = [];
 function render(rows, pool) {{
   const scope = (pool || ENTITIES) === ENTITIES
     ? ENTITIES.length.toLocaleString() + ' cross-source entities'
@@ -712,11 +724,12 @@ function render(rows, pool) {{
   count.textContent = rows.length === 400
     ? 'first 400 matches in ' + scope
     : rows.length.toLocaleString() + ' of ' + scope;
+  renderedRows = rows;
   if (!rows.length) {{
     list.innerHTML = '<p class="hint">No entity matches that search.</p>';
     return;
   }}
-  list.innerHTML = rows.map(e => {{
+  list.innerHTML = rows.map((e, idx) => {{
     // ORDER, not e.sources: the latter is alphabetical, which would put the
     // badges in a different order than the figures directly beside them.
     const badges = ORDER.filter(s => e.sources.includes(s)).map(s =>
@@ -772,7 +785,13 @@ function render(rows, pool) {{
       conf = '<div class="alias">Single source; nothing was matched to it.</div>';
     }}
 
-    return '<div class="entity">' +
+    // Itemized campaign-finance records fetch lazily (see loadCampaignFinanceRows)
+    // the first time this row opens -- fetching ../ne-campaign-finance/d/rows.json
+    // (10+ MB) for every entity up front would defeat the point of a lazy index.
+    const txnsSlot = e.sources.includes('campaign_finance')
+      ? '<div class="txns-slot"></div>' : '';
+
+    return '<div class="entity" data-idx="' + idx + '">' +
       '<div class="etop">' +
       '<svg class="chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 15 12 9 18"/></svg>' +
       '<div class="ename">' + esc(e.name) + '</div>' +
@@ -782,6 +801,7 @@ function render(rows, pool) {{
       '<h4>Why these records are grouped</h4>' + conf +
       '<h4>Name variants folded into this entity</h4>' + aliases +
       '<h4>Where each figure comes from</h4>' + prov +
+      txnsSlot +
       '</div></div>';
   }}).join('');
 }}
@@ -871,9 +891,72 @@ function apply() {{
   }}).slice(0, 400), pool);
 }}
 
+// ne-connect is the read-only join; ne-campaign-finance's own site owns the
+// itemized transaction data. This fetches that site's already-published
+// d/rows.json (same GitHub Pages deployment, not a third party) once and
+// caches it, rather than duplicating ~117k modern + ~253k legacy rows into
+// this project's own build. Fetched lazily, on first expand of any entity
+// with campaign-finance records -- not on page load.
+let CF_ROWS = null;
+function loadCampaignFinanceRows() {{
+  if (CF_ROWS) return Promise.resolve(CF_ROWS);
+  return fetch('../ne-campaign-finance/d/rows.json').then(r => r.json())
+    .then(j => {{ CF_ROWS = j; return j; }});
+}}
+
+const ORG_DETAIL_URL = 'https://nadc-e.nebraska.gov/PublicSite/SearchPages/OrganizationDetail.aspx?OrganizationID={{org_id}}';
+const cfMoney = n => '$' + n.toLocaleString(undefined, {{maximumFractionDigits: 0}});
+
+// rows.json is keyed by the exact raw contributor name campaign-finance's
+// own scraper recorded, which is not always this entity's canonical display
+// name (a different source may have won that pick -- see build_entities.py
+// _canonical_name()). Rather than tracking which alias belongs to which
+// source, try every alias plus the display name as a lookup key: a name that
+// was never a campaign-finance contributor simply matches nothing.
+function campaignFinanceTxns(e, rowsData) {{
+  const keys = new Set([e.name, ...e.aliases.map(a => a.name)]);
+  const txns = [];
+  keys.forEach(k => {{ (rowsData[k] || []).forEach(t => txns.push(t)); }});
+  txns.sort((a, b) => (b[0] || '').localeCompare(a[0] || ''));
+  return txns;
+}}
+
+function renderTxnTable(txns) {{
+  if (!txns.length) return '';
+  const rowsHtml = txns.slice(0, 200).map(t => {{
+    const [dateStr, amount, filerName, orgId, city, state, desc, included, era] = t;
+    const recipient = orgId
+      ? '<a href="' + ORG_DETAIL_URL.replace('{{org_id}}', encodeURIComponent(orgId)) +
+        '" target="_blank" rel="noopener">' + esc(filerName) + '</a>'
+      : esc(filerName);
+    const place = [city, state].filter(Boolean).join(', ');
+    const legacyNote = era === 'pre2022' ? ' <span class="era-tag">pre-2022</span>' : '';
+    const dim = included ? '' : ' style="opacity:.55" title="not counted toward the total -- see include_in_total"';
+    return '<tr' + dim + '><td>' + esc(dateStr) + legacyNote + '</td><td class="n">' +
+      cfMoney(amount) + '</td><td>' + recipient + '</td><td>' + esc(place) + '</td>' +
+      '<td>' + esc(desc) + '</td></tr>';
+  }}).join('');
+  const more = txns.length > 200
+    ? '<p class="hint">' + (txns.length - 200).toLocaleString() + ' more not shown.</p>' : '';
+  return '<h4>Itemized campaign-finance records</h4>' +
+    '<table><tr><th>Date</th><th>Amount</th><th>To</th><th>City, State</th><th>Description</th></tr>' +
+    rowsHtml + '</table>' + more;
+}}
+
 list.addEventListener('click', ev => {{
   const row = ev.target.closest('.entity');
-  if (row) row.classList.toggle('open');
+  if (!row) return;
+  const opening = !row.classList.contains('open');
+  row.classList.toggle('open');
+  if (!opening || row.dataset.txnsLoaded) return;
+  const e = renderedRows[Number(row.dataset.idx)];
+  const slot = row.querySelector('.txns-slot');
+  if (!e || !slot) return;
+  row.dataset.txnsLoaded = '1';
+  slot.textContent = 'Loading itemized records…';
+  loadCampaignFinanceRows().then(rowsData => {{
+    slot.innerHTML = renderTxnTable(campaignFinanceTxns(e, rowsData));
+  }}).catch(() => {{ slot.textContent = 'Could not load itemized records.'; }});
 }});
 pills.addEventListener('click', ev => {{
   const btn = ev.target.closest('.pill');

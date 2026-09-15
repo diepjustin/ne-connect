@@ -174,6 +174,37 @@ figures) is deliberately not pulled yet; `load_fec_contributors()` reads
 whatever rows exist (none today) so it activates automatically once that
 decision changes, with no code to remember to wire in later.
 
+## Cross-fetch: `ne-campaign-finance`'s `d/rows.json`
+
+Added 2026-09-15, at the project owner's request to make ne-connect "the
+main site" rather than a summary that sends a reporter elsewhere for the
+underlying records. ne-connect does not duplicate transaction-level data
+into its own build; an entity's detail view fetches
+`../ne-campaign-finance/d/rows.json` lazily (once per page load, only on
+first expand of an entity with `campaign_finance` in its sources) and
+renders the matching rows inline. Same GitHub Pages deployment, not a
+third party -- the footer's "nothing loads from a third party" claim still
+holds.
+
+`d/rows.json` is `{source_name: [[date, amount, filer_name, org_id, city,
+state, description, included, era], ...]}`, built by
+`ne-campaign-finance/scripts/build_site.py build_search_index()`. `era` is
+`"modern"` (2022+, from `contributions.csv`) or `"pre2022"` (from
+`contributions_legacy.csv`, added in this same change) -- both eras share
+one list here since a reporter wants every itemized record for a name, but
+the dollar totals shown elsewhere are still never summed across eras. Keyed
+by the exact raw `source_name` string that scraper recorded, which is not
+always this entity's canonical display name (a different source may have
+won that pick -- see `_canonical_name()`); ne-connect's JS tries every alias
+plus the display name as a lookup key rather than tracking which alias
+belongs to which source.
+
+This is the first of the five sources to get this treatment. Contracts has
+its own bespoke binary search index (not a simple per-vendor JSON), and
+lobbying/disclosures publish no itemized, fetchable payload at all today --
+extending this pattern to them needs new export work in those repos first,
+tracked as open work rather than done silently.
+
 ## Dedup contract, by source
 
 See `PLAN.md`'s dedup table — it is the one place this is kept current, since
