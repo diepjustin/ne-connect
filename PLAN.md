@@ -149,9 +149,21 @@ Lives in `ne-campaign-finance/`.
   - Less urgent, worth a comment rather than a blocker: **formb4b1's `Nature of Expenditure` is mostly clean but not entirely** — counted: `D` 37,946, `E` 4,170, `I` 3,204, and then **346 `A` and 51 `B`, values not in the schema doc's documented set (`D`/`I`/`L`/`E`) at all**, plus 2 `L` (Loan). Handle the way `normalize.py` already handles an unrecognized transaction type elsewhere: keep the row, report the unknown code, don't silently drop or misclassify it.
   - Forms confirmed clean (their type/nature field values are all straightforwardly contribution- or expenditure-only, per the same schema read): formb72 (Direct contributions, Amount only, no nature field), formb2b (`D`=Direct/`K`=In-kind/`I`=Independent Expenditure — all genuinely expenditures since this is the *committee's own* Form B-2 expenditure schedule, unlike formb73's corporate-filer ambiguity), formb1d (plain expenditures, no nature field).
 
-**1.3 Searchable page `ne-campaign-finance/index.html` with `?q=`**
-- `scripts/build_site.py` grows from landing page to a small search site: an inline index of the 25,174 contributors and 894 filers (name, totals, counts, era) and a lazily fetched `d/rows.json` of contributions grouped by contributor key (~117k modern rows; add legacy rows when 1.2 lands, tagged by era). Pattern copied from ne-connect's inline + lazy split, not from the 6.85 MB contracts page. Read `?q=` on landing like `ne-contracts/index.html:2417`. Per-row link to `OrganizationDetail.aspx?OrganizationID=<org_id>` for the filer (README:121); itemization caveat on every view. Respect `docs/PRIVACY.md`: no address display, no reverse-address search, no bulk donor export.
-- Hub 0.6 template for campaign finance switches to `../ne-campaign-finance/?q=`.
+**1.3 Searchable page `ne-campaign-finance/index.html` with `?q=`** — done
+(`ne-campaign-finance@91417a2`, `ne-connect@dc78f89`). 25,173 contributors and
+926 filers inline (keyed by raw name, not `org_id` — a name-based key matches
+this project's convention elsewhere); `d/rows.json` lazy per-contributor
+transaction payload (117k modern rows, era not yet tagged — 1.2 hasn't landed).
+`OrganizationDetail.aspx` verified live: the real path is
+`/PublicSite/SearchPages/OrganizationDetail.aspx?OrganizationID=<org_id>`, not
+`/PublicSite/OrganizationDetail.aspx` as a plausible guess would have it.
+`docs/PRIVACY.md` respected: address_1/address_2 never reach the JSON payload
+(tested), individuals render as a plain transaction list with no aggregate
+stat card, no reverse-address search or bulk export built. Hub's
+`campaign_finance` link template switched to `../ne-campaign-finance/?q=`.
+Verified live in-browser: search, filer/contributor expansion, individual vs.
+organization presentation, `?q=` deep-linking. 61 tests in
+`ne-campaign-finance` (4 new), 99 in `ne-connect`.
 
 **1.4 Hub ingest with `era`**
 - `ingest/sources.py`: `era: str = "modern"` on `Party` (`:28-45`); `load_contributors(..., filename, era)`; `load_legacy_contributors()`. Same source, role, bit 2: era is a property of the record.
