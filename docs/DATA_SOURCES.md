@@ -295,10 +295,58 @@ redistributing any of it.**
 
 ## FEC federal campaign finance
 
-- **Status:** planned (`PLAN.md` Phase 3)
-- **URL:** bulk files at https://www.fec.gov/files/bulk-downloads/
-- **Access:** no API key needed, reproducible snapshots per election cycle,
-  filtered to Nebraska after download.
+- **Status:** recon done, scaffolding built (`PLAN.md` Phase 3) — checked
+  2026-09-15. Not yet hooked into the hub.
+- **Repo:** `github.com/diepjustin/ne-fec` (local-only so far — no GitHub
+  remote, not pushed anywhere; stays local until a human decides to publish
+  it).
+- **URL:** bulk files at `https://www.fec.gov/files/bulk-downloads/<YYYY>/`
+  (`cn<yy>.zip` candidates, `cm<yy>.zip` committees, `indiv<yy>.zip`
+  individual contributions, `pas2<yy>.zip`/`oth<yy>.zip` inter-committee
+  transactions). No API key needed — this is FEC's own public
+  reproducible-snapshot download tree, distinct from the rate-limited
+  `api.open.fec.gov` API, which has its own separate terms that do not apply
+  here.
+- **Terms-of-use gate (CLAUDE.md rule 6), checked 2026-09-15:**
+  `https://www.fec.gov/robots.txt` has no `Disallow` covering
+  `/files/bulk-downloads/` (its disallow list targets the FEC's *search*
+  endpoints — `/data/candidates/?*`, `/data/receipts/?*`, `/search/?*`, etc.
+  — not the static bulk-download tree). No terms-of-use page on `fec.gov`
+  forbidding automated or bulk access was found. The one substantive legal
+  restriction that does apply is FEC's ["Sale or use of contributor
+  information"](https://www.fec.gov/updates/sale-or-use-contributor-information/)
+  notice (citing the Federal Election Campaign Act), quoted exactly:
+  > "information about individual contributors taken from FEC reports cannot
+  > be sold or used for soliciting contributions (including any political or
+  > charitable contribution) or for any commercial purpose."
+  That same notice explicitly exempts this project's use:
+  > "Commission regulations provide that the restriction does not apply to
+  > the use of individual contributor information in newspapers, magazines,
+  > books or similar communications, as long as the principal purpose of the
+  > communication is not to solicit contributions or conduct commercial
+  > activity."
+  Per CLAUDE.md rule 6, this is **not blocked** — bulk download proceeded.
+  This restriction is also why `EMPLOYER`/`OCCUPATION` never reach processed
+  output regardless (privacy parity with NADC handling, `docs/PRIVACY.md`).
+- **Scale:** `indiv<yy>.zip` (itemized individual contributions, >$200) is
+  multi-GB — 4.24 GB for the 2024 cycle alone, confirmed via HEAD request.
+  `cn<yy>.zip` (356 KB) and `cm<yy>.zip` (883 KB) for 2024 are trivially
+  small by comparison. `ne-fec/scripts/download_bulk.py` streams to disk in
+  fixed-size chunks (never buffers a whole file); `filter_ne.py` stream-
+  decodes and filters line by line so the national `indiv` file is never
+  materialized as a list. A real pull and timing of a full `indiv<yy>.zip`
+  has **not** been done yet — budget it as a bounded weekly run, not part of
+  routine work; see `ne-fec/README.md` "What's still open."
+- **Validated against real data:** pulled the real 2024-cycle `cn24.zip` and
+  `cm24.zip` and ran the full pipeline end to end — **51 Nebraska
+  candidates, 97 Nebraska committees**, `check_data.py` clean. 21 tests, no
+  network, in `ne-fec/tests/`.
+- **Schema and hub plan:** unchanged from the shape already in `PLAN.md`
+  Phase 3 (`fec_contributions_ne.csv` columns, `sub_id` dedup with
+  amendment-supersession by `file_num`, bit 16, `load_fec_contributors()`
+  treating `entity_tp == "IND"` rows as individuals — always review, never
+  auto-merge). None of the hub-side code (`ingest/`, `resolve/`, `build/`
+  in this repo) has been touched; that is separate follow-up work.
 
 ---
 

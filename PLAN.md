@@ -276,6 +276,14 @@ Tests: parsers from trimmed captures; `match_kind`; idempotency; hub union-witho
 
 ## Phase 3 — FEC federal campaign finance (`ne-fec/`)
 
+**Recon + scaffolding done 2026-09-15.** Terms-of-use gate cleared (see
+`docs/DATA_SOURCES.md` for the exact robots.txt/legal-notice finding).
+`download_bulk.py`, `filter_ne.py`, `normalize.py`, `check_data.py` built and
+validated against the real 2024-cycle `cn24.zip`/`cm24.zip` (51 NE candidates,
+97 NE committees, 21 tests). `indiv24.zip` (4.24 GB) deliberately not pulled —
+that's a real, bounded decision for later, not scaffolding. `ne-fec/` is
+local-only, no GitHub remote. Hub integration (below) not started.
+
 Bulk files per cycle at `https://www.fec.gov/files/bulk-downloads/<YYYY>/`: `indiv<yy>.zip`, `cm<yy>.zip`, `cn<yy>.zip`, optionally `pas2<yy>.zip`, `oth<yy>.zip`; headers from `data_dictionaries/`. No API key, reproducible snapshots.
 
 - `scripts/download_bulk.py` (stream to `data/raw/<cycle>/`, sha256 in `scrape_meta.json`); `scripts/filter_ne.py` (stream-decode; `STATE == "NE"` from indiv, `CMTE_ST == "NE"` from cm, `CAND_ST == "NE" or CAND_OFFICE_ST == "NE"` from cn; never load indiv whole); `scripts/normalize.py` → `fec_contributions_ne.csv`, `fec_committees_ne.csv`, `fec_candidates_ne.csv`; `check_data.py`; `tests/`.
