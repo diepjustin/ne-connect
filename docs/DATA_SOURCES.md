@@ -203,7 +203,7 @@ redistributing any of it.**
 
 ## Secretary of State business filings
 
-- **Status:** planned (`PLAN.md` Phase 2)
+- **Status:** blocked (`PLAN.md` Phase 2, gate 2.0 — checked 2026-09-14)
 - **URL:** https://sos.nebraska.gov/business-services/corporate-and-business
 - **Free search returns:** name, Secretary of State account number, type, status.
   A details view opens registered agent, principal office, and filed documents.
@@ -211,9 +211,39 @@ redistributing any of it.**
 - **Bulk:** a paid batch service at $15 per 1,000 records
   (https://www.nebraska.gov/SpecialRequestSearches/index.cgi), authorized by
   Neb. Rev. Stat. § 33-101, run by a third party rather than the SOS itself.
-- **Our approach:** do not buy the registry. Look up only entities that already
-  appear in another dataset, cache results indefinitely, refresh on demand. If a
-  targeted batch pull is ever needed, budget it explicitly and record the cost.
+- **Terms-of-use gate (CLAUDE.md rule 6 / PLAN.md 2.0), checked 2026-09-14:**
+  `sos.nebraska.gov/robots.txt` and `www.nebraska.gov/robots.txt` both allow
+  crawling of the relevant paths (no `Disallow` on `/business-services/` or
+  `/sos/corp/`). The actual free search tool the SOS page links to
+  ("Corporation and Business Search") is not hosted on `sos.nebraska.gov` at
+  all — it points to `https://www.nebraska.gov/sos/corp/corpsearch.cgi`, a
+  legacy Nebraska.gov (Tyler Technologies / NIC) application. That host's own
+  site-wide terms — linked from `nebraska.gov`'s footer as "Terms & Conditions"
+  and published at **`https://www.nebraska.gov/policies/`** under "Nebraska Use
+  Policy" (a separate page from the unrelated "AI Resident Assistant Terms and
+  Conditions" at `/policies/ai.html`, which only governs the site's chatbot) —
+  explicitly forbid automated access. Exact quoted text, "Site Conduct"
+  section:
+  > "You may not without our prior written permission use any computer code,
+  > data mining software, 'robot,' 'bot,' 'spider,' 'scraper' or other
+  > automatic device, or program, algorithm or methodology having similar
+  > processes or functionality, or any manual process, to monitor or copy any
+  > of the Web pages, data or content found on this Site or accessed through
+  > this Site."
+  This is a blanket prohibition on scraping/bots without prior written
+  permission — not limited to bulk or commercial use — and it governs the
+  `www.nebraska.gov` host that serves the actual search results, so it applies
+  directly to `corpsearch.cgi`. Per CLAUDE.md rule 6, this source is **not
+  scraped**. No code was written for this phase; recon stopped at the gate.
+- **If this ever gets revisited:** the path forward is requesting written
+  permission from Nebraska.gov/Tyler Technologies (contact via
+  `sos.corp@nebraska.gov` or `support@nebraska.gov`) for narrowly-scoped,
+  low-volume, per-entity lookups — not a bulk pull, which the state already
+  sells separately at $15/1,000 records. Absent that permission, this source
+  stays blocked; do not build `ne-sos/` or `scripts/sos.py`.
+- **Our approach (moot while blocked):** do not buy the registry either. If
+  permission is ever granted, look up only entities that already appear in
+  another dataset, cache results indefinitely, refresh on demand.
 
 ---
 
