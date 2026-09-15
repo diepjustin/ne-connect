@@ -140,9 +140,22 @@ Lives in `ne-campaign-finance/`.
 - Ran end-to-end against the live zip: all 13 forms extract and validate cleanly, rerun correctly skips on unchanged sha256. 57 tests (14 new, `ne-campaign-finance`).
 - Date columns carry sentinel values (`12/31/9999`, `01/01/0001`, `01/01/0900` all seen) — not yet enforced as a validator warning; worth adding when 1.2 starts parsing dates.
 
-**1.2 `scripts/normalize_legacy.py` → `contributions_legacy.csv`, `expenditures_legacy.csv`**
-- Columns of `contributions.csv` (`normalize.py:198-208`) plus `era="pre2022"`, `source_form`. `receipt_id = legacy:<form>:<key>`; `org_id = legacy:<committee id>`. `source_url` = legacy search UI. Never writes into `contributions.csv`. Byte-identical on rerun (test).
-- **Per-row classification recon done 2026-09-12 (not yet coded — these are real judgment calls on real financial data, deliberately left for review rather than silently encoded overnight).** Read `nadc_tables.rtf`'s actual field descriptions (not just the header text) for all nine contribution/expenditure forms. Three findings that change how naive "this form = contributions" / "that form = expenditures" mapping would misclassify real dollars:
+**1.2 `scripts/normalize_legacy.py` → `contributions_legacy.csv`, `loans_legacy.csv`,
+`other_receipts_legacy.csv`, `expenditures_legacy.csv`** — done
+(`ne-campaign-finance@2a8f910`). Real numbers: 253,552 contributions, 110 loans,
+1,205 other receipts, 125,809 expenditures. The three decisions below were made
+by the project owner on 2026-09-14 (all three recommended options), not guessed:
+formb73 `E` → `expenditures_legacy.csv`; formb5 `L` → new `loans_legacy.csv`;
+formb4b1 `A`/`B` → kept in `expenditures_legacy.csv`, flagged unclassified.
+Also found and fixed while building this: six forms are missing "Report ID"
+specifically (the second-to-last column, not the last as the recon below loosely
+described) — right-padding as that description implies would have silently
+swapped Contributor Name into Report ID's slot; fixed by dropping "Report ID"
+from the header before parsing, confirmed against real extracted lines from all
+six forms. Sentinel dates (`12/31/9999` etc.) are now dropped and counted rather
+than parsed into real-but-absurd dates. 15 new tests, 76 total in
+`ne-campaign-finance`.
+- **Per-row classification recon done 2026-09-12.** Read `nadc_tables.rtf`'s actual field descriptions (not just the header text) for all nine contribution/expenditure forms. Three findings that change how naive "this form = contributions" / "that form = expenditures" mapping would misclassify real dollars:
   1. **formb73 mixes contributions and the filer's own spending in one table.** Its `Nature of Contribution` column takes `I`=In-Kind, `P`=Personal Service, or **`E`=Independent Expenditure** — an `E` row is the corporation/PAC's own spending, not money it received, and belongs in `expenditures_legacy.csv`, not `contributions_legacy.csv`. Counted on the real file: **635 of 7,328 rows (8.7%) are `E`** — not a rounding error, would meaningfully inflate a "money this PAC received" total if left in. (Real distribution: `I` 6,470, `E` 635, `P` 203, blank 20.)
   2. **formb5's `Nature of Contribution` includes `L`=Loan** alongside `M`=Money, `I`=In-kind, `P`=Pledge. `normalize.py`'s existing rule for the modern data — a loan is borrowed money, not support, and gets its own `loans.csv` rather than inflating `contributions.csv` — applies here too. Counted: **110 of 4,712 rows (2.3%) are `L`**. (Real distribution: `M` 4,266, `I` 247, `L` 110, blank 65, `P` 24.) Decide whether legacy loans get a `loans_legacy.csv` (matching modern) or are simply excluded with a count logged; either is defensible, silently including them as contributions is not.
   3. **formb1ab/formb2a/formb4a's "Unpaid Pledges" column is a promise, not money**, same as the modern pipeline's "a bare Pledge is deliberately NOT a contribution" rule (`normalize.py`'s module docstring, trap #1). These forms report Cash/In-Kind/Unpaid Pledges as three separate amount columns per row — one legacy row can fan out into up to two canonical contribution rows (cash, in-kind) plus a non-contribution pledge record, not one row each.
