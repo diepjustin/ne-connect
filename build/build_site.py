@@ -221,6 +221,7 @@ def build_entities():
         # pre-2022 money and 2022+ money are not the same claim.
         era_totals = defaultdict(lambda: {"records": 0, "amount": 0.0})
         aliases = {}
+        lobby_id = ""
         for member in members:
             source = member["source"]
             totals[source]["records"] += int(member["records"] or 0)
@@ -229,6 +230,8 @@ def build_entities():
                 era = member.get("era") or "modern"
                 era_totals[era]["records"] += int(member["records"] or 0)
                 era_totals[era]["amount"] += float(member["amount"] or 0)
+            if source == "lobbying" and member.get("source_id"):
+                lobby_id = member["source_id"]
             # One row per distinct spelling, remembering where it was seen.
             aliases.setdefault(member["alias"], {"sources": set(), "url": ""})
             aliases[member["alias"]]["sources"].add(source)
@@ -255,6 +258,11 @@ def build_entities():
                     {"name": name, "sources": sorted(a["sources"]), "url": a["url"]}
                     for name, a in sorted(aliases.items())
                 ],
+                # The lobbying source's own principal id, when this entity has
+                # one -- the join key for fetching ../ne-lobbying/d/positions.json,
+                # same field name build_full_index() already uses for the lazy
+                # index's lobby_id column.
+                "lobby_id": lobby_id,
                 "match": next(
                     (
                         reasons[m["normalized_key"]]
@@ -409,6 +417,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
     --muted: #6b6252; --accent: #a1291f; --serif: Georgia, "Times New Roman", ui-serif, serif;
     --contracts: #3b6ea8; --finance: #3b8f63; --lobbying: #7a5fbf;
     --disclosures: #b08a2e; --fec: #b3486b;
+    --support: #1c7f4e; --oppose: #b3261e; --neutral: #626b76;
   }}
   @media (prefers-color-scheme: dark) {{
     :root {{
@@ -416,6 +425,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
       --muted: #a89d88; --accent: #e2695c;
       --contracts: #7fb0e8; --finance: #7fce9e; --lobbying: #b79eec;
       --disclosures: #e0b764; --fec: #e58aa8;
+      --support: #4cc38a; --oppose: #ff8a80; --neutral: #949dab;
     }}
   }}
   * {{ box-sizing: border-box; }}
@@ -520,6 +530,9 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
     font-size: 9.5px; text-transform: uppercase; color: var(--muted);
     border: 1px solid var(--border); border-radius: 3px; padding: 0 3px; margin-left: 4px;
   }}
+  .pos-s {{ color: var(--support); }}
+  .pos-o {{ color: var(--oppose); }}
+  .pos-x {{ color: var(--neutral); }}
   .hint {{ color: var(--muted); font-size: 13px; padding: 14px 4px; }}
   footer {{
     max-width: 900px; margin: 0 auto; padding: 20px; border-top: 1px solid var(--border);
@@ -785,11 +798,13 @@ function render(rows, pool) {{
       conf = '<div class="alias">Single source; nothing was matched to it.</div>';
     }}
 
-    // Itemized campaign-finance records fetch lazily (see loadCampaignFinanceRows)
-    // the first time this row opens -- fetching ../ne-campaign-finance/d/rows.json
-    // (10+ MB) for every entity up front would defeat the point of a lazy index.
+    // Itemized records fetch lazily the first time this row opens -- fetching
+    // ../ne-campaign-finance/d/rows.json (35+ MB) or ../ne-lobbying/d/positions.json
+    // (11+ MB) for every entity up front would defeat the point of a lazy index.
     const txnsSlot = e.sources.includes('campaign_finance')
-      ? '<div class="txns-slot"></div>' : '';
+      ? '<div class="txns-slot cf-slot"></div>' : '';
+    const posSlot = e.sources.includes('lobbying') && e.lobby_id
+      ? '<div class="txns-slot pos-slot"></div>' : '';
 
     return '<div class="entity" data-idx="' + idx + '">' +
       '<div class="etop">' +
@@ -801,7 +816,7 @@ function render(rows, pool) {{
       '<h4>Why these records are grouped</h4>' + conf +
       '<h4>Name variants folded into this entity</h4>' + aliases +
       '<h4>Where each figure comes from</h4>' + prov +
-      txnsSlot +
+      txnsSlot + posSlot +
       '</div></div>';
   }}).join('');
 }}
@@ -851,7 +866,7 @@ function widen(row) {{
   }}));
   return {{
     name, sources, totals, contrib_eras: contribEras, aliases, match: null,
-    hard_id: false, lite: true,
+    hard_id: false, lite: true, lobby_id: lobbyId,
     links: Object.fromEntries(sources.map(s => [s, SOURCE_LINK[s](name, lobbyId)])),
   }};
 }}
@@ -943,20 +958,62 @@ function renderTxnTable(txns) {{
     rowsHtml + '</table>' + more;
 }}
 
+// Same pattern as loadCampaignFinanceRows: ne-lobbying's own already-published
+// d/positions.json, fetched once and cached, never duplicated into this build.
+let LOBBY_POSITIONS = null;
+function loadLobbyingPositions() {{
+  if (LOBBY_POSITIONS) return Promise.resolve(LOBBY_POSITIONS);
+  return fetch('../ne-lobbying/d/positions.json').then(r => r.json())
+    .then(j => {{ LOBBY_POSITIONS = j; return j; }});
+}}
+
+const POSITION_CLASS = {{Support: 'pos-s', Oppose: 'pos-o', Neutral: 'pos-x'}};
+
+// Unlike campaign finance, lobbying principals carry their own numeric id
+// (e.lobby_id, same source_id build_entities.py already writes) -- an exact
+// key into positions.json, no alias-guessing needed.
+function renderPositionsTable(positions) {{
+  if (!positions.length) return '';
+  const sorted = positions.slice().sort((a, b) => (b[0] + b[1]).localeCompare(a[0] + a[1]));
+  const rowsHtml = sorted.slice(0, 200).map(p => {{
+    const [legislature, bill, position, lobbyist] = p;
+    const cls = POSITION_CLASS[position] || '';
+    return '<tr><td>' + esc(legislature) + '</td><td>' + esc(bill) + '</td>' +
+      '<td class="' + cls + '">' + esc(position) + '</td><td>' + esc(lobbyist) + '</td></tr>';
+  }}).join('');
+  const more = positions.length > 200
+    ? '<p class="hint">' + (positions.length - 200).toLocaleString() + ' more not shown.</p>' : '';
+  return '<h4>Registered lobbying positions</h4>' +
+    '<table><tr><th>Legislature</th><th>Bill</th><th>Position</th><th>Lobbyist</th></tr>' +
+    rowsHtml + '</table>' + more;
+}}
+
 list.addEventListener('click', ev => {{
   const row = ev.target.closest('.entity');
   if (!row) return;
   const opening = !row.classList.contains('open');
   row.classList.toggle('open');
-  if (!opening || row.dataset.txnsLoaded) return;
+  if (!opening) return;
   const e = renderedRows[Number(row.dataset.idx)];
-  const slot = row.querySelector('.txns-slot');
-  if (!e || !slot) return;
-  row.dataset.txnsLoaded = '1';
-  slot.textContent = 'Loading itemized records…';
-  loadCampaignFinanceRows().then(rowsData => {{
-    slot.innerHTML = renderTxnTable(campaignFinanceTxns(e, rowsData));
-  }}).catch(() => {{ slot.textContent = 'Could not load itemized records.'; }});
+  if (!e) return;
+
+  const cfSlot = row.querySelector('.cf-slot');
+  if (cfSlot && !row.dataset.cfLoaded) {{
+    row.dataset.cfLoaded = '1';
+    cfSlot.textContent = 'Loading itemized records…';
+    loadCampaignFinanceRows().then(rowsData => {{
+      cfSlot.innerHTML = renderTxnTable(campaignFinanceTxns(e, rowsData));
+    }}).catch(() => {{ cfSlot.textContent = 'Could not load itemized records.'; }});
+  }}
+
+  const posSlot = row.querySelector('.pos-slot');
+  if (posSlot && !row.dataset.posLoaded) {{
+    row.dataset.posLoaded = '1';
+    posSlot.textContent = 'Loading registered positions…';
+    loadLobbyingPositions().then(positionsData => {{
+      posSlot.innerHTML = renderPositionsTable(positionsData[e.lobby_id] || []);
+    }}).catch(() => {{ posSlot.textContent = 'Could not load registered positions.'; }});
+  }}
 }});
 pills.addEventListener('click', ev => {{
   const btn = ev.target.closest('.pill');

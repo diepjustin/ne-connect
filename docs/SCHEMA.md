@@ -199,11 +199,25 @@ won that pick -- see `_canonical_name()`); ne-connect's JS tries every alias
 plus the display name as a lookup key rather than tracking which alias
 belongs to which source.
 
-This is the first of the five sources to get this treatment. Contracts has
-its own bespoke binary search index (not a simple per-vendor JSON), and
-lobbying/disclosures publish no itemized, fetchable payload at all today --
-extending this pattern to them needs new export work in those repos first,
-tracked as open work rather than done silently.
+Contracts still has its own bespoke binary search index (not a simple
+per-vendor JSON) and disclosures still publishes no itemized, fetchable
+payload -- extending this pattern to them needs new export work in those
+repos first, tracked as open work rather than done silently.
+
+## Cross-fetch: `ne-lobbying`'s `d/positions.json`
+
+Added 2026-09-15, same request as above. `ne-lobbying/scripts/build_site.py
+build_positions_index()` writes `{principal_id: [[legislature, bill,
+position, lobbyist, registration_id], ...]}`, deduped on `(legislature,
+bill, registration_id, position)` -- the same natural key
+`ingest/sources.py load_lobbying_principals()` already uses, since the
+Legislature's own pages list some registrations twice.
+
+Unlike campaign finance, this join doesn't need alias-guessing: a lobbying
+principal carries its own numeric id (`source_id` in `canonical_entities.csv`,
+exposed to the page as `lobby_id` on both the inline entity object --
+`build_entities()` in `build_site.py` -- and the lazily-widened one), so
+ne-connect's JS looks it up directly as `positionsData[e.lobby_id]`.
 
 ## Dedup contract, by source
 

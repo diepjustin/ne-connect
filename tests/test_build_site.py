@@ -1,3 +1,4 @@
+import csv
 import json
 
 import build_site
@@ -69,6 +70,69 @@ def test_non_fec_entity_has_zero_fec_recs():
     index = build_full_index(rows)
     fec_recs_col = INDEX_COLUMNS.index("fec_recs")
     assert index[0][fec_recs_col] == 0
+
+
+CANONICAL_HEADER = [
+    "entity_id", "canonical_name", "alias", "normalized_key", "source", "era",
+    "role", "entity_type", "records", "amount", "source_id", "source_url",
+]
+
+
+def _write_canonical(tmp_path, *rows):
+    path = tmp_path / "canonical_entities.csv"
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=CANONICAL_HEADER)
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
+
+
+def test_lobbying_member_gives_the_inline_entity_a_lobby_id(tmp_path, monkeypatch):
+    """The join key for fetching ../ne-lobbying/d/positions.json client-side --
+    same source_id build/build_entities.py already writes per member."""
+    monkeypatch.setattr(build_site, "DATA_DIR", tmp_path)
+    _write_canonical(
+        tmp_path,
+        {
+            "entity_id": "1", "canonical_name": "ACME CO", "alias": "ACME CO",
+            "normalized_key": "acme co", "source": "contracts", "era": "modern",
+            "role": "vendor", "entity_type": "organization", "records": "1",
+            "amount": "100.0", "source_id": "", "source_url": "",
+        },
+        {
+            "entity_id": "1", "canonical_name": "ACME CO", "alias": "ACME CO",
+            "normalized_key": "acme co", "source": "lobbying", "era": "modern",
+            "role": "principal", "entity_type": "organization", "records": "3",
+            "amount": "0", "source_id": "2285", "source_url": "",
+        },
+    )
+
+    entities = build_site.build_entities()
+
+    assert entities[0]["lobby_id"] == "2285"
+
+
+def test_non_lobbying_entity_has_empty_lobby_id_inline(tmp_path, monkeypatch):
+    monkeypatch.setattr(build_site, "DATA_DIR", tmp_path)
+    _write_canonical(
+        tmp_path,
+        {
+            "entity_id": "1", "canonical_name": "ACME CO", "alias": "ACME CO",
+            "normalized_key": "acme co", "source": "contracts", "era": "modern",
+            "role": "vendor", "entity_type": "organization", "records": "1",
+            "amount": "100.0", "source_id": "", "source_url": "",
+        },
+        {
+            "entity_id": "1", "canonical_name": "ACME CO", "alias": "ACME CO",
+            "normalized_key": "acme co", "source": "campaign_finance", "era": "modern",
+            "role": "contributor", "entity_type": "organization", "records": "1",
+            "amount": "50.0", "source_id": "", "source_url": "",
+        },
+    )
+
+    entities = build_site.build_entities()
+
+    assert entities[0]["lobby_id"] == ""
 
 
 def test_retrieval_dates_notes_missing_indiv_pull(tmp_path, monkeypatch):

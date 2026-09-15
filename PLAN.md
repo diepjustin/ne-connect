@@ -21,25 +21,32 @@ Exploration found the hub shipping in a degraded state and the lobbying collecti
   **Partially revisited 2026-09-15** at the project owner's explicit request: ne-connect should be "the main site," showing itemized records inline rather than a summary + link-out. For campaign finance, ne-connect's entity detail view now fetches `../ne-campaign-finance/d/rows.json` (that page's own already-published payload, not a duplicate) and renders the matching transaction rows inline, still linking to `?q=` as the fallback and the place to see everything else about that page. See `docs/SCHEMA.md`'s "Cross-fetch" section. Contracts, lobbying, disclosures and FEC individual contributions are NOT done yet -- see the note after this list.
 - `ne-connect/new/`: fold `docs/*.md` and `CLAUDE.md` into `ne-connect/`, delete the rest.
 
-**Open work: itemized records for the other four sources (added 2026-09-15).**
-Campaign finance is done (above); the "fetch from the source project's own
-files" approach the owner chose does not transfer cleanly to the rest without
-new export work first:
+**Open work: itemized records for the other three sources (added
+2026-09-15, lobbying done 2026-09-15).** Campaign finance and lobbying are
+done (above); the "fetch from the source project's own files" approach the
+owner chose does not transfer cleanly to what's left without new export
+work first:
 - **Contracts** has its own bespoke binary full-text search index (token
   files, posting lists), not a simple per-vendor JSON -- integrating it means
   either reverse-engineering that format from ne-connect's JS or having
   `ne-contracts` publish a plain per-vendor JSON alongside it.
-- **Lobbying** publishes no client-fetchable per-record data at all today --
-  `bill_positions.csv`/`expenses_principal.csv` are gitignored and never
-  written anywhere the browser can reach; `ne-lobbying/index.html` is a
-  static, pre-baked report page, not a search page like campaign finance's.
 - **Disclosures** (`financial_interests.csv`/`financial_interests_legacy.csv`)
-  have no dedicated search page or lazy JSON either -- same gap as lobbying.
+  have no dedicated search page or lazy JSON at all today.
 - **FEC** individual contributions are moot until `indiv24.zip` is pulled;
   committees/candidates are already fully shown (no itemized breakdown to add).
-Each of these needs a small `d/rows.json`-equivalent built in its own repo
-before ne-connect can fetch it, mirroring what
-`ne-campaign-finance/scripts/build_site.py` now does. Not started.
+
+**Lobbying, done 2026-09-15.** `ne-lobbying/scripts/build_site.py` gained
+`build_positions_index()` -> `d/positions.json`, `{principal_id: [[legislature,
+bill, position, lobbyist, registration_id], ...]}`, deduped the same way
+`load_lobbying_principals()` already does. ne-connect's `build_entities()`
+and `widen()` both now carry `lobby_id` on the entity object (the join key,
+no alias-guessing needed unlike campaign finance); the JS fetches
+`../ne-lobbying/d/positions.json` lazily on first expand and renders a
+"Registered lobbying positions" table (legislature, bill, position colored
+support/oppose/neutral, lobbyist). Verified live against the real data:
+Nebraska Cattlemen, Inc. (2,435 positions) rendered correctly alongside its
+itemized campaign-finance table in the same expanded row. 39 tests passing
+in `ne-lobbying` (5 new), 115 in `ne-connect` (2 new).
 
 **Verified state driving Phase 0** (paths under repo root):
 - Position sweep died on an uncaught `requests.ReadTimeout` after legislature 109. `ne-lobbying/scripts/lobby.py:161-178` retries only HTTP 429; `:436-441` catches only `KeyboardInterrupt`/`RateLimited`. `sweep_all.sh:19-22` treats a vanished pid as "finished", so 108-3, 108, 107-1, 107, 106, 105 were never started. 39,909 positions for 109 only.
