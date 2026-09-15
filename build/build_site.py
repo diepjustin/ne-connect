@@ -27,7 +27,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ingest"))
 
-from sources import NADC_CONTRIBUTIONS_SEARCH_URL  # noqa: E402
 
 DATA_DIR = ROOT / "data"
 OUT_PATH = ROOT / "index.html"
@@ -463,13 +462,13 @@ const LABELS = {json.dumps(SOURCE_LABELS)};
 const RETRIEVED = {json.dumps(retrieved)};
 const PROJECTS = {json.dumps({k: v[0] for k, v in SOURCE_PROJECTS.items()})};
 const ORDER = {json.dumps(list(SOURCE_LABELS))};
-const NADC_SEARCH_URL = {json.dumps(NADC_CONTRIBUTIONS_SEARCH_URL)};
-// One link template per source, applied to a lazily-loaded row. Contracts and
-// lobbying can point straight at the record; campaign finance has no per-name
-// search yet (Phase 1), so every contributor gets the same NADC search page.
+// One link template per source, applied to a lazily-loaded row. All three
+// now point at a per-name search on that source's own project page --
+// campaign_finance switched from the generic NADC search page once Phase 1.3
+// shipped a real ?q= search at ../ne-campaign-finance/.
 const SOURCE_LINK = {{
   contracts: name => '../ne-contracts/?q=' + encodeURIComponent(name),
-  campaign_finance: () => NADC_SEARCH_URL,
+  campaign_finance: name => '../ne-campaign-finance/?q=' + encodeURIComponent(name),
   lobbying: (name, lobbyId) => lobbyId
     ? 'https://nebraskalegislature.gov/lobbyist/view.php?link=view_principal&id=' + lobbyId
     : '',
