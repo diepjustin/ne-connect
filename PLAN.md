@@ -262,6 +262,18 @@ ingestion (the "Hub:" bullet below, `d/rows.json` wiring) still open.
 
 Tests: `test_normalize_legacy.py` (header gate, dedupe count, era, idempotency); `test_build_site.py` for the search index shape and `?q=`; `ne-connect/tests/test_era.py`; C-1 parser tests from trimmed HTML and a fixture PDF.
 **1.6 Workflow**: extend `ne-campaign-finance-daily.yml` with the legacy sha check, `scrape_c1.py --new-only`, and `build_site.py`; then `ne-connect-nightly.yml` (see Automation notes) since the hub now has two automated inputs plus contracts.
+**Partial, done 2026-09-15**: legacy sha check + `normalize_legacy.py` +
+`build_site.py` added to `ne-campaign-finance-daily.yml`, verified green on
+`workflow_dispatch` (a real bug caught and fixed along the way — see
+`ne-campaign-finance@d97d520`: `download_legacy.py`'s skip check trusted
+committed metadata without confirming the extracted files actually existed
+on that runner, so a fresh CI cache silently produced zero legacy data
+while claiming "skipping extraction, nothing new"). `scrape_c1.py` is
+**deliberately not wired into the cron** — it has no `--new-only`/
+incremental mode yet, and an unbounded nightly sweep of a live financial-
+disclosure site needs that logic and a cadence decision first, not a
+silent overnight default. `ne-connect-nightly.yml` not started — bigger
+scope (touches live Pages publishing), held for explicit sign-off.
 Risks: rtf schema quality; legacy committee ids not joinable to modern; OCR quality on C-1 scans; `d/rows.json` size (measure; split by first letter if over ~5 MB).
 Effort: 8-11 days (legacy 3-4, search page 2, C-1 3-5).
 
