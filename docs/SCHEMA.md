@@ -85,6 +85,37 @@ verbosity costs nothing and buys richer per-alias detail (each alias's own
 `sources` and `url`) than the lazy index carries. Built by
 `build_site.py build_entities()`; see that function for the exact shape.
 
+## Upstream: `ne-campaign-finance`'s C-1/C-2 artifacts (not yet ingested here)
+
+Built 2026-09-15 (`PLAN.md` 1.5). Not yet read by `ingest/sources.py` or
+`build/build_entities.py` — that wiring is a later phase — but documented here
+so the columns are on record before that ingest is written.
+
+`data/processed/c1_filings.csv` (`scripts/scrape_c1.py`): one row per C-1/C-2
+filing found in the NADC search grid, `disclosure_id, year, filer_name_raw,
+filer_office, filed_method, filing_reason, filed_date, document_url,
+retrieved_at`. `disclosure_id` is the state's own GUID for a Manual (scanned)
+filing, or a deterministic hash for an Electronic filing (which the grid never
+exposes an id for at all — see that script's module docstring on the
+`__doPostBack` mystery). `document_url` is a working link for every row: a
+direct PDF for Manual, the search page itself for Electronic, since the state
+does not host a static URL for an e-filed report.
+
+`data/processed/financial_interests.csv` (`scripts/build_financial_interests.py`,
+post-2022-07-11 only) and `data/processed/financial_interests_legacy.csv`
+(`scripts/normalize_legacy_c1.py`, pre-2022-07-11, `era="pre2022"` plus
+`source_form`) share one shape: `disclosure_id, item_type, counterparty_name_raw,
+detail, source_url, retrieved_at, ocr`. `item_type` is one of `income_source,
+business_association, financial_institution, stock, real_property,
+other_financial_interest, creditor, gift, potential_conflict_of_interest`.
+`ocr` is `True` only for rows extracted from a scanned PDF with no text layer
+via `pytesseract` — confirmed the common case for Manual filings (75% of a
+real sample), so a caller must not treat an `ocr: True` row at the same
+confidence as a text-layer or legacy row. Never rewrites the state's own
+words (CLAUDE.md rule 1) — see `DATA_SOURCES.md`'s C-1/C-2 entry for the
+known limitation that a mostly-blank filing's instructional prose can leak
+into `counterparty_name_raw` on the line-fallback extraction path.
+
 ## Dedup contract, by source
 
 See `PLAN.md`'s dedup table — it is the one place this is kept current, since

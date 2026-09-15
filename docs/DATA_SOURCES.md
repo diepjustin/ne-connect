@@ -151,49 +151,95 @@ redistributing any of it.**
 
 ## Statements of Financial Interest (Form C-1) and Conflicts (Form C-2)
 
-- **Status:** recon done (both eras), build planned (`PLAN.md` Phase 1)
+- **Status:** built 2026-09-15 (`PLAN.md` Phase 1.5), lives in
+  `ne-campaign-finance`: `scripts/scrape_c1.py` (search-grid index ->
+  `data/processed/c1_filings.csv`), `scripts/build_financial_interests.py`
+  (PDF fetch/OCR -> `data/processed/financial_interests.csv`, post-2022-07-11
+  only), `scripts/normalize_legacy_c1.py` (the frozen zip's four C-1/C-2 forms
+  -> `data/processed/financial_interests_legacy.csv`, same shape). Verified
+  end-to-end against the live site (20 filings scraped across two 2023 result
+  pages, one Electronic PDF resolved and parsed, six Manual PDFs downloaded
+  and parsed) and against the real legacy zip (11,523 items from 81,256
+  formc1 filers). 115 tests passing in `ne-campaign-finance`.
 - **Publisher:** NADC
-- **Pre-2022-07-11 access:** already collected in bulk, structured, from
-  `nadc_data.zip` — see the historical campaign-finance entry above. No scraper
-  needed for this era.
-- **2018–present access (recon done 2026-09-11):** a dedicated public search
-  page — `https://nadc-e.nebraska.gov/PublicSite/SearchPages/Search.aspx
+- **Pre-2022-07-11 access:** `nadc_data.zip`'s `formc1.txt` (81,804 rows),
+  `formc1inc.txt` (10,604 rows), `formc1prop.txt` (3 rows), `formc2.txt`
+  (1,013 rows) — see the historical campaign-finance entry above. No scraper;
+  `normalize_legacy_c1.py` joins them on `(Candidate ID, Date Received)`, per
+  `nadc_tables.rtf`'s own "Use along with Date Received to link to FORM10"
+  note. `formc1inc`'s `Type of Inocome` code (confirmed against
+  `nadc_tables.rtf`'s FORM10 section) is `I`=Source of Income,
+  `B`=Business Association, `F`=Financial Institution, `S`=Issuers of Stock,
+  `C`=Creditors, `G`=Gifts. **Privacy:** `formc1`'s `Candidate Address` (a home
+  street address) is read only long enough to be dropped —
+  `strip_to_city_state_zip()` is the sole function that touches it, and no
+  output column carries a street address at all.
+- **2018–present access:** a dedicated public search page —
+  `https://nadc-e.nebraska.gov/PublicSite/SearchPages/Search.aspx
   ?SearchTypeCodeHook=86C705B4-76BE-4FD9-B9A0-B607711F8A3A`, titled "Statements
-  of Financial Interests (C-1)". Confirmed live and reachable with no login.
-  - **No "Individual Supplemental Filer" trick needed here** — that quirk in
-    the original brief may describe finding an individual filer through the
-    *Committees/Businesses/Others* search, not this page; this page searches
-    C-1 filers directly by last name. Worth a quick check before scraping, but
-    not a blocker.
-  - Fields: Filing Year (dropdown, **2018–2026 only** — this online system does
-    not go back further; 2018–2022-07-11 overlaps the legacy zip's coverage,
-    so `scrape_c1.py` needs a dedup rule against `formc1.txt`, not just an era
-    split), Last Name, Filed Method (All/Electronic/Manual), Office/Position
-    Held, Office Sought, and Filing Reason checkboxes (candidate / annual
-    report / left office / newly appointed / **Supplemental Information** —
-    this last one is likely the actual C-2 / amendment marker).
-  - **Classic ASP.NET WebForms**, not a JSON API: `__VIEWSTATE` /
-    `__EVENTVALIDATION` / `__doPostBack`, confirmed via the page's own form
-    inputs and script. No `.ashx`/JSON endpoint found. Results grid is
-    paginated (page-size 10/25/50, "1 2 3 4 5 6 7 8 9 10 …" — many pages, no
-    visible total count) — same POST-body-in-cache-key pattern as
-    `ne-lobbying/scripts/lobby.py`'s `Fetcher` (1.5's plan to copy it was
-    right).
-  - **Every row's "View" link goes straight to a PDF** for most rows, not
-    another search hop: `../Reporting/DocumentImagePopup.aspx?PFD_FilingID=<guid>`.
-    A minority of rows route through `__doPostBack` instead of a direct GUID
-    link — not yet explained; worth checking in 1.5 whether that's electronic
-    filings rendering inline HTML rather than a scanned PDF.
-  - **Text-layer check done 2026-09-13, confirmed via `pypdf`**: sampled 4 real
-    filings from the 2023 grid (GUIDs `a4f60783-2968-4734-93e1-2419010c0a9f`,
-    `aaf0ba9f-3ebb-4a16-a753-d0c9c26ec3fb`, `71393121-fa34-4cc1-b0c1-4e34fa5199de`,
-    `45b456b0-60aa-4e4f-8bd9-9d1ace264662`; 345 KB-543 KB each). **3 of 4 (75%)
-    extract zero characters — scanned images, no text layer at all.** Only one
-    had a real text layer (4,347 chars from its first two pages). This
-    confirms the suspicion: for 1.5, OCR is the common path, not a fallback
-    for the occasional scanned outlier — plan the pipeline (and its review
-    cost) around that from the start rather than treating pypdf/pdfminer as
-    the primary path with OCR as a hedge.
+  of Financial Interests (C-1)". No login. Filing Year dropdown only goes back
+  to 2018; `scrape_c1.py` writes every filing regardless of year, and
+  `build_financial_interests.py` only processes `year >= 2023` (2022
+  straddles the legacy freeze date and is skipped rather than guessed at —
+  see that script's docstring).
+- **Classic ASP.NET WebForms**, not a JSON API: `__VIEWSTATE` /
+  `__EVENTVALIDATION` / `__doPostBack`. Every search and every page turn is a
+  full form-field replay (not the async/UpdatePanel partial-postback shape —
+  that 500s). Results grid paginates 10/page by default with a *windowed*
+  pager (page 1 links only to pages 2–11, same shape as
+  `ne-lobbying/scripts/lobby.py`'s bill pager) — `scrape_c1.py` re-reads the
+  pager after every page rather than trusting the first page's links.
+  Raw responses aren't cacheable by content (every response carries a fresh
+  `__VIEWSTATE`), so `scrape_c1.py`'s `PageCache` caches *parsed rows* per
+  `(year, filed_method, page)` instead — a resumable, content-level cache
+  rather than lobby.py's request-byte cache.
+- **The `__doPostBack` mystery, solved (2026-09-14, confirmed both by
+  replaying raw HTTP and by driving a real browser session):** every row's
+  "View" link looks identical, but its control id comes in exactly two
+  shapes tied to **Filed Method**, confirmed by filtering the live page to
+  Filed Method=Electronic and seeing every resulting row use the postback
+  form:
+  - **Manual** (scanned paper filing) → `colActions_sub_actManualView0N` →
+    a plain `Configurable.handlePopup('../Reporting/DocumentImagePopup.aspx
+    ?PFD_FilingID=<guid>')` — a real, stable, unauthenticated GET URL.
+  - **Electronic** (typed, e-filed) → `colActions_sub_actView0N` →
+    `__doPostBack(...)`. Clicking it in a live browser session showed why:
+    the server does a full synchronous postback and re-renders the entire
+    search page with the C-1 rendered fresh as a PDF, embedded inline as
+    `<iframe src="data:application/pdf;base64,...">` — **there is no
+    server-hosted URL for an Electronic filing's PDF at all**; it exists only
+    as bytes in that one response. `scrape_c1.resolve_electronic_pdf()`
+    replays that exact postback (verified live: decodes to a valid,
+    born-digital PDF) on demand for the PDF pipeline. Because no static URL
+    exists, `c1_filings.csv`'s `document_url` for an Electronic row points at
+    the search page itself (the same "stopgap door" pattern 0.7 already used
+    for campaign-finance entities) rather than a fabricated per-filing link.
+- **Text-layer / OCR, refined 2026-09-15 with real fetches of both
+  populations:**
+  - **Manual (scanned) filings**: of 4 real 2023 samples, 3 of 4 (75%)
+    extract zero characters via `pypdf`/`pdfminer` — OCR (PyMuPDF render +
+    `pytesseract`) is the *primary* path for this population, not a
+    fallback. OCR quality on a photographed, hand-filled form is rough (a
+    real sample produced fragments like `"Fal M LalWd"` for a handwritten
+    line) — every row extracted this way carries `ocr: true` in
+    `financial_interests.csv` so a downstream reader can treat it with
+    appropriately lower confidence, never at face value with a verbatim
+    text-layer row.
+  - **Electronic (e-filed) filings**: the one sample resolved via the
+    postback dance is a clean, born-digital PDF with a full pypdf text
+    layer — no OCR needed. This makes sense in hindsight: the state only has
+    an *image* to scan for a filing that arrived on paper.
+- **Item extraction is a best-effort text segmentation, not a full field
+  parse.** `build_financial_interests.py` splits each filing's text by its
+  `ITEM N` headers and extracts either numbered entries (`"1.) Name 1a.)
+  detail"`, Items 6/7/11) or one row per line (Items 8/9/10, which aren't
+  numbered in the real form). The state's own words are never rewritten
+  (CLAUDE.md rule 1) — but on a mostly-blank filing with no numbered entries,
+  the line-fallback path can pick up the item's own instructional prose as if
+  it were a filer's answer (the all-caps-title filter catches printed
+  headers like "REAL PROPERTY OF THE FILER IN NEBRASKA" but not mixed-case
+  instructional paragraphs). Worth a follow-up pass stripping each item's
+  known-static instructional text before this is treated as clean data.
 - **Why it matters:** C-1 lists officials' own business interests, income sources,
   and creditors. Cross-referenced against contracts, it is the sharpest edge in this
   whole tool.

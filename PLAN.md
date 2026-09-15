@@ -183,7 +183,33 @@ organization presentation, `?q=` deep-linking. 61 tests in
 - `build_entities.py`: key both eras; `era` column in `canonical_entities.csv`, one row per (alias, source, era).
 - `build_site.py`: new named columns `contrib_amt_legacy`, `contrib_recs_legacy`; inline totals `{modern:{}, pre2022:{}}`; rendered as two lines, never summed; `retrieval_dates()` adds a "pre-2022 data frozen by the state" note.
 
-**1.5 C-1 / C-2 statements of financial interest, `scripts/scrape_c1.py`**
+**1.5 C-1 / C-2 statements of financial interest, `scripts/scrape_c1.py`** — scraper,
+PDF pipeline and legacy normalizer done 2026-09-15 (`ne-campaign-finance`); hub
+ingestion (the "Hub:" bullet below, `d/rows.json` wiring) still open.
+- **Built and verified end-to-end 2026-09-15.** `scripts/scrape_c1.py`
+  (search-grid index), `scripts/build_financial_interests.py` (PDF fetch/OCR),
+  `scripts/normalize_legacy_c1.py` (the four legacy forms below). Live run:
+  20 filings scraped across two 2023 result pages (10 Manual, 10 Electronic);
+  one Electronic filing resolved and parsed (67 items, clean text layer, no
+  OCR); six Manual filings downloaded and parsed (202 items, 5 of 6 needed
+  OCR). Legacy run against the real zip: 11,523 items from 81,256 formc1
+  filers, 995 C-2 statements, one unrecognized `Type of Inocome` code class
+  logged rather than dropped. 115 tests passing.
+  - **The `__doPostBack` mystery is solved** (see `docs/DATA_SOURCES.md`'s C-1
+    entry for the full writeup): it is exactly Manual (scanned, direct GUID
+    link) vs Electronic (e-filed, no static URL — the state renders the PDF
+    fresh into the postback response as a base64 data URI).  `document_url`
+    for an Electronic row falls back to the search page itself, same
+    "stopgap door" pattern as 0.7.
+  - **OCR is confirmed the primary path for Manual filings** (75% of a real
+    sample have no text layer), and every OCR-derived row carries `ocr: true`
+    so it is never presented at the same confidence as a verbatim
+    text-layer or legacy row. Electronic filings, by contrast, are clean
+    born-digital PDFs needing no OCR at all.
+  - **Open/approximate:** item extraction segments each filing's text by its
+    `ITEM N` headers rather than doing a full field-level parse; on a
+    mostly-blank filing the line-fallback path can pick up instructional
+    prose as if it were a filer's answer. Worth a follow-up pass.
 - **Recon done 2026-09-11 — splits this task in two, and the pre-2022 half no longer needs a scraper at all.** `nadc_data.zip` (1.1) already contains `formc1.txt` (81,804 rows, "Statement of Financial Interest" — filer name/office/address plus filing metadata), `formc1inc.txt` (10,604 rows, income sources/business associations/financial institutions/creditors/gifts, one row per item), `formc1prop.txt` (3 rows, real/other property — essentially unused), and `formc2.txt` (1,013 rows, "Potential Conflict of Interest Statement"). Full column list in `nadc_tables.rtf` / `docs/SCHEMA.md`. This is structured pipe-delimited data through the 2022-07-11 freeze date — no PDF, no OCR, normalize it the same way as every other legacy form in 1.2.
   - **Privacy:** `formc1.txt`'s `Candidate Address` is a home street address in plaintext. Strip to city/state/zip before it reaches `canonical_entities.csv` or any display — `docs/PRIVACY.md` rule 2, non-negotiable.
   - `Candidate ID` + `Date Received` is the join key across `formc1`/`formc1inc`/`formc1prop` per the schema doc's own note ("Use along with Date Received to link to FORM10").
