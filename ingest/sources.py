@@ -26,6 +26,10 @@ LOBBYING_DATA = REPO_ROOT / "ne-lobbying" / "data"
 # C-1/C-2 financial disclosures live in the same processed/ dir as campaign
 # finance -- same repo (ne-campaign-finance), different pipeline.
 DISCLOSURES_DATA = REPO_ROOT / "ne-campaign-finance" / "data" / "processed"
+# ne-fec writes its processed CSVs straight to data/, not data/processed/ --
+# unlike ne-campaign-finance, there's only one pipeline stage here so there
+# was nothing to separate raw from processed by directory.
+FEC_DATA = REPO_ROOT / "ne-fec" / "data"
 
 CONTRACT_FILES = ("nu_contracts.csv", "nu_purchase_orders.csv", "state_agencies.csv")
 
@@ -385,3 +389,122 @@ def load_disclosure_filers(data_dir: Path = None):
                 if party:
                     party.record_count += 1
     return filers
+
+
+def load_fec_committees(data_dir: Path = None):
+    """FEC committees active in Nebraska, keyed by cmte_id.
+
+    Organizations, not people -- a PAC or party committee, never a candidate.
+    `source_url` already points at fec.gov's own committee page, so this
+    carries no dependency on ne-fec (a local-only repo, no GitHub remote)
+    ever being published.
+    """
+    data_dir = Path(data_dir or FEC_DATA)
+    path = data_dir / "fec_committees_ne.csv"
+    committees = {}
+    if not path.exists():
+        return committees
+
+    with path.open(encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh):
+            cmte_id = (row.get("cmte_id") or "").strip()
+            name = (row.get("cmte_name") or "").strip()
+            if not cmte_id or not name:
+                continue
+            party = committees.get(cmte_id)
+            if party is None:
+                party = committees[cmte_id] = Party(
+                    name=name,
+                    source="fec",
+                    role="committee",
+                    entity_type="organization",
+                    source_id=cmte_id,
+                    sample_url=(row.get("source_url") or "").strip(),
+                )
+                city = (row.get("city") or "").strip().upper()
+                if city:
+                    party.cities.add(city)
+            party.record_count += 1
+    return committees
+
+
+def load_fec_candidates(data_dir: Path = None):
+    """FEC candidates who have run for a Nebraska office, keyed by cand_id.
+
+    entity_type="individual" always -- a candidate is a real person, and
+    PLAN.md Phase 3's "committees and candidates as organizations" line was
+    wrong on this point (a name like "GRACE, DENNIS B." is exactly the kind
+    of person match.py's involves_person guard exists to protect: it must
+    never auto-merge with a vendor or contributor on name similarity alone).
+    """
+    data_dir = Path(data_dir or FEC_DATA)
+    path = data_dir / "fec_candidates_ne.csv"
+    candidates = {}
+    if not path.exists():
+        return candidates
+
+    with path.open(encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh):
+            cand_id = (row.get("cand_id") or "").strip()
+            name = (row.get("cand_name") or "").strip()
+            if not cand_id or not name:
+                continue
+            party = candidates.get(cand_id)
+            if party is None:
+                party = candidates[cand_id] = Party(
+                    name=name,
+                    source="fec",
+                    role="candidate",
+                    entity_type="individual",
+                    source_id=cand_id,
+                    sample_url=(row.get("source_url") or "").strip(),
+                )
+                city = (row.get("city") or "").strip().upper()
+                if city:
+                    party.cities.add(city)
+            party.record_count += 1
+    return candidates
+
+
+def load_fec_contributors(data_dir: Path = None):
+    """FEC itemized contributors, keyed by raw name.
+
+    Empty today: `fec_contributions_ne.csv` is header-only because
+    `indiv24.zip` (4.24 GB) was deliberately not pulled yet (PLAN.md Phase 3)
+    -- this reads whatever is there so it activates automatically once that
+    decision changes, without anyone having to remember to wire it in later.
+    `entity_tp == "IND"` is a real person and never auto-merges (match.py's
+    involves_person guard); anything else is an organization (a PAC, a
+    corporation making an independent expenditure, etc).
+    """
+    data_dir = Path(data_dir or FEC_DATA)
+    path = data_dir / "fec_contributions_ne.csv"
+    contributors = {}
+    if not path.exists():
+        return contributors
+
+    with path.open(encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh):
+            name = (row.get("name") or "").strip()
+            if not name:
+                continue
+            party = contributors.get(name)
+            if party is None:
+                party = contributors[name] = Party(
+                    name=name,
+                    source="fec",
+                    role="contributor",
+                    entity_type="individual" if row.get("entity_tp") == "IND" else "organization",
+                    sample_url=(row.get("source_url") or "").strip(),
+                )
+            party.record_count += 1
+            try:
+                party.total_amount += (
+                    float(row["transaction_amt"]) if row.get("transaction_amt") else 0.0
+                )
+            except ValueError:
+                pass
+            city = (row.get("city") or "").strip().upper()
+            if city:
+                party.cities.add(city)
+    return contributors

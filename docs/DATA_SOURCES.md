@@ -295,8 +295,9 @@ redistributing any of it.**
 
 ## FEC federal campaign finance
 
-- **Status:** recon done, scaffolding built (`PLAN.md` Phase 3) — checked
-  2026-09-15. Not yet hooked into the hub.
+- **Status:** recon and scaffolding done, hub integration done 2026-09-15
+  (`PLAN.md` Phase 3) — committees and candidates only; individual itemized
+  contributions (`indiv24.zip`) not pulled, see below.
 - **Repo:** `github.com/diepjustin/ne-fec` (local-only so far — no GitHub
   remote, not pushed anywhere; stays local until a human decides to publish
   it).
@@ -341,12 +342,30 @@ redistributing any of it.**
   `cm24.zip` and ran the full pipeline end to end — **51 Nebraska
   candidates, 97 Nebraska committees**, `check_data.py` clean. 21 tests, no
   network, in `ne-fec/tests/`.
-- **Schema and hub plan:** unchanged from the shape already in `PLAN.md`
-  Phase 3 (`fec_contributions_ne.csv` columns, `sub_id` dedup with
-  amendment-supersession by `file_num`, bit 16, `load_fec_contributors()`
-  treating `entity_tp == "IND"` rows as individuals — always review, never
-  auto-merge). None of the hub-side code (`ingest/`, `resolve/`, `build/`
-  in this repo) has been touched; that is separate follow-up work.
+- **Hub integration done 2026-09-15.** `ingest/sources.py` gained
+  `load_fec_committees()` (`entity_type="organization"` always) and
+  `load_fec_candidates()` (`entity_type="individual"` always — **PLAN.md's
+  original Phase 3 text said "committees and candidates as organizations",
+  which was wrong**: a candidate is a real person, and match.py's
+  `involves_person` guard exists precisely to stop a name like "GRACE,
+  DENNIS B." from auto-merging with a vendor on name similarity alone;
+  corrected here rather than followed literally). `load_fec_contributors()`
+  reads `fec_contributions_ne.csv` (header-only today) and returns `{}`
+  cleanly. `build/build_entities.py` wires `fec` into every pairing (bit 16
+  in `build_site.py`'s `SOURCE_BITS`). Rebuilt against the real data: 148
+  fec keys (51 candidates + 97 committees), **21 of them cross-matched with
+  an existing campaign-finance entity** — e.g. Deb Fischer for US Senate,
+  the Douglas County Republican and Democratic parties, HDR Inc.'s employee
+  PAC. `entities_in_two_or_more_sources` is now 1,734 (`data/` is gitignored,
+  so there's no committed prior figure to diff against).
+  `SOURCE_LABELS["fec"]` is "FEC Committees & Candidates", not "Federal
+  Contributions" — there's no dollar figure to show yet, and the page's
+  `retrieval_dates()`/`fec_note` states that gap explicitly (derived from
+  `scrape_meta.json` lacking an `"indiv"` key, not from the CSV being
+  empty) rather than rendering a `$0` that would misleadingly assert
+  "checked, found nothing." `SOURCE_PROJECTS["fec"]` links to
+  `https://www.fec.gov/data/` (fec.gov's own front door), not the local-only
+  `ne-fec` repo. 113 tests passing in `ne-connect` (8 new).
 
 ---
 

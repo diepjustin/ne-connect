@@ -39,16 +39,23 @@ OUT_PATH = ROOT / "index.html"
 INDEX_DIR = ROOT / "d"
 INDEX_PATH = INDEX_DIR / "entities.json"
 
-# Bits 8 and 16 are reserved for SoS and FEC (PLAN.md Phase 2/3) -- neither is
-# wired into the hub yet, but the numbering is fixed so a later phase never
-# has to shift an existing source's bit.
-SOURCE_BITS = {"contracts": 1, "campaign_finance": 2, "lobbying": 4, "disclosures": 32}
+# Bit 8 is reserved for SoS (PLAN.md Phase 2, blocked by nebraska.gov's terms
+# of use -- see docs/DATA_SOURCES.md); the numbering is fixed so a later
+# phase never has to shift an existing source's bit.
+SOURCE_BITS = {
+    "contracts": 1, "campaign_finance": 2, "lobbying": 4, "disclosures": 32, "fec": 16,
+}
 
 SOURCE_LABELS = {
     "contracts": "Contracts",
     "campaign_finance": "Contributions",
     "lobbying": "Lobbying",
     "disclosures": "Financial Disclosures",
+    # Not "Federal Contributions" yet: fec_contributions_ne.csv is header-only
+    # today (indiv24.zip, 4.24 GB, deliberately not pulled -- PLAN.md Phase
+    # 3). Label what's actually loaded; relabel once individual itemized
+    # contributions land.
+    "fec": "FEC Committees & Candidates",
 }
 
 # Where a reader goes to check a number rather than take it on trust.
@@ -57,6 +64,10 @@ SOURCE_PROJECTS = {
     "campaign_finance": ("../ne-campaign-finance/", "Nebraska Campaign Finance"),
     "lobbying": ("../ne-lobbying/", "Nebraska Lobbying"),
     "disclosures": ("../ne-campaign-finance/", "Nebraska Campaign Finance"),
+    # ne-fec is local-only (no GitHub remote) by design -- link to the FEC's
+    # own data front door instead, same "stopgap door" pattern as 0.7's NADC
+    # search-page link.
+    "fec": ("https://www.fec.gov/data/", "FEC"),
 }
 
 # d/entities.json header. Named, not positional-by-convention: every later
@@ -72,6 +83,11 @@ INDEX_COLUMNS = [
     # Phase 1.5: disclosure filers, item count only -- a C-1 has no dollar
     # concept, so there is no disclosure_amt column.
     "disclosure_recs",
+    # Phase 3: committees + candidates only, item count same as disclosures.
+    # No fec_amt column yet -- fec_contributions_ne.csv (the dollar figures)
+    # is header-only until indiv24.zip is pulled, and a $0 column would
+    # misleadingly assert "checked, found nothing" rather than "not loaded".
+    "fec_recs",
 ]
 
 
@@ -125,6 +141,27 @@ def retrieval_dates():
         with c1_filings.open(encoding="utf-8", newline="") as fh:
             stamps = [row["retrieved_at"] for row in csv.DictReader(fh) if row.get("retrieved_at")]
         dates["disclosures"] = max(stamps) if stamps else ""
+
+    fec_meta = ROOT.parent / "ne-fec" / "data" / "scrape_meta.json"
+    if fec_meta.exists():
+        cycles = json.loads(fec_meta.read_text())
+        stamps = [
+            pull["retrieved_at"][:10]
+            for cycle in cycles.values()
+            for pull in cycle.values()
+            if pull.get("retrieved_at")
+        ]
+        dates["fec"] = max(stamps) if stamps else ""
+        # The fact that matters for the page isn't the CSV's row count (a
+        # symptom) but this: no cycle here has ever recorded an "indiv" pull.
+        # Read it from scrape_meta.json, not from fec_contributions_ne.csv
+        # being empty, so this note survives even after a partial indiv pull
+        # that a future run interrupts.
+        if not any("indiv" in cycle for cycle in cycles.values()):
+            dates["fec_note"] = (
+                "committees and candidates only -- individual itemized "
+                "contributions (indiv24.zip) have not been downloaded yet"
+            )
     return dates
 
 
@@ -286,6 +323,7 @@ def build_full_index(rows):
         finance_legacy = era_totals["pre2022"]
         lobbying = totals["lobbying"]
         disclosures = totals["disclosures"]
+        fec = totals["fec"]
         name = members[0]["canonical_name"]
         other_aliases = sorted({m["alias"] for m in members} - {name})
         index.append([
@@ -297,6 +335,7 @@ def build_full_index(rows):
             other_aliases,
             round(finance_legacy[1]), finance_legacy[0],
             disclosures[0],
+            fec[0],
         ])
     index.sort(key=lambda e: (-bin(e[1]).count("1"), -e[2], e[0]))
     return index
@@ -357,7 +396,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
     --muted: #626b76; --accent: #d00000; --accent-soft: #fdecec;
     --row-alt: #fafbfc; --shadow: 0 1px 3px rgba(0,0,0,.08);
     --contracts: #0a6ebd; --finance: #1c7f4e; --lobbying: #7c4dd8;
-    --disclosures: #b8860b;
+    --disclosures: #b8860b; --fec: #a3315c;
   }}
   @media (prefers-color-scheme: dark) {{
     :root {{
@@ -365,7 +404,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
       --muted: #949dab; --accent: #ff6b6b; --accent-soft: #2a1c1d;
       --row-alt: #181c20; --shadow: 0 1px 3px rgba(0,0,0,.4);
       --contracts: #5aa9e6; --finance: #4cc38a; --lobbying: #b08cff;
-      --disclosures: #e0b23d;
+      --disclosures: #e0b23d; --fec: #e086a7;
     }}
   }}
   * {{ box-sizing: border-box; }}
@@ -421,6 +460,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
   .b-campaign_finance {{ color: var(--finance); }}
   .b-lobbying {{ color: var(--lobbying); }}
   .b-disclosures {{ color: var(--disclosures); }}
+  .b-fec {{ color: var(--fec); }}
   .b-hard {{ color: var(--muted); }}
   .figs {{
     display: flex; gap: 16px; flex-wrap: wrap;
@@ -485,6 +525,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
     <option value="campaign_finance">Has contributions</option>
     <option value="lobbying">Has lobbying</option>
     <option value="disclosures">Has a financial disclosure</option>
+    <option value="fec">Has an FEC committee/candidate record</option>
   </select>
   <span id="count"></span>
 </div>
@@ -520,7 +561,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
 <script>
 const ENTITIES = {payload};          // cross-source, inline, shown by default
 const TOTAL_INDEXED = {total_indexed};
-const BITS = {{contracts: 1, campaign_finance: 2, lobbying: 4, disclosures: 32}};
+const BITS = {{contracts: 1, campaign_finance: 2, lobbying: 4, disclosures: 32, fec: 16}};
 let ALL = null;                      // the other ~78,000, fetched on first search
 let loading = false;
 const LABELS = {json.dumps(SOURCE_LABELS)};
@@ -542,6 +583,10 @@ const SOURCE_LINK = {{
   // string falls back to PROJECTS.disclosures (the project's home page)
   // rather than link somewhere that would not actually find this name.
   disclosures: () => '',
+  // No per-name search either -- fec.gov's own site would need the
+  // committee/candidate id, which lazily-loaded rows don't currently carry.
+  // Falls back to PROJECTS.fec (fec.gov/data/).
+  fec: () => '',
 }};
 
 // Contract totals run past a billion -- Hawkins Construction alone is $1.28B
@@ -593,6 +638,14 @@ function figures(e) {{
     if (s === 'disclosures') {{
       return '<div class="fig">' + t.records.toLocaleString() +
         '<span>' + LABELS[s] + ' · items disclosed · self-reported</span></div>';
+    }}
+    // FEC: committees and candidates only today, no dollar figure at all --
+    // individual itemized contributions (the actual money) aren't loaded
+    // yet, so this is a record count same as disclosures, not $0.
+    if (s === 'fec') {{
+      return '<div class="fig">' + t.records.toLocaleString() +
+        '<span>' + LABELS[s] + ' · FEC.gov record' +
+        (t.records > 1 ? 's' : '') + '</span></div>';
     }}
     // Lobbying is counted in registered positions, and carries a dollar figure
     // only where the principal's Form C has been collected. An entity with no
@@ -656,6 +709,9 @@ function render(rows, pool) {{
         line += '<div class="alias">' + esc(RETRIEVED.campaign_finance_legacy_note) +
           '</div>';
       }}
+      if (s === 'fec' && RETRIEVED.fec_note) {{
+        line += '<div class="alias">' + esc(RETRIEVED.fec_note) + '</div>';
+      }}
       return line;
     }}).join('');
 
@@ -700,6 +756,7 @@ function widen(row) {{
   if (bits & BITS.campaign_finance) sources.push('campaign_finance');
   if (bits & BITS.lobbying) sources.push('lobbying');
   if (bits & BITS.disclosures) sources.push('disclosures');
+  if (bits & BITS.fec) sources.push('fec');
   const totals = {{}};
   const contribEras = {{}};
   if (bits & BITS.contracts) {{
@@ -721,6 +778,9 @@ function widen(row) {{
   }}
   if (bits & BITS.disclosures) {{
     totals.disclosures = {{records: row[COL.disclosure_recs], amount: 0}};
+  }}
+  if (bits & BITS.fec) {{
+    totals.fec = {{records: row[COL.fec_recs], amount: 0}};
   }}
   const name = row[COL.name];
   const lobbyId = row[COL.lobby_id];

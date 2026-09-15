@@ -4,6 +4,9 @@ from sources import (
     NADC_CONTRIBUTIONS_SEARCH_URL,
     load_contributors,
     load_disclosure_filers,
+    load_fec_candidates,
+    load_fec_committees,
+    load_fec_contributors,
     load_legacy_contributors,
 )
 
@@ -72,3 +75,63 @@ def test_disclosure_filer_links_to_the_real_document(tmp_path):
     (tmp_path / "c1_filings.csv").write_text(C1_FILINGS)
     filers = load_disclosure_filers(tmp_path)
     assert filers["abc-123"].sample_url == "https://example.gov/abc-123"
+
+
+FEC_COMMITTEES = (
+    "cmte_id,cmte_name,treasurer_name,city,state,zip,cmte_designation,cmte_type,"
+    "cmte_party_affiliation,org_type,connected_org_name,cand_id,cycle,source_url,"
+    "source_snapshot\n"
+    "C00003988,NEBRASKA DEMOCRATIC PARTY,\"KESSLER, TED\",LINCOLN,NE,68510,U,Y,DEM,"
+    ",DNC NE STATE PARTY VICTORY FUND,,2024,https://www.fec.gov/data/committee/"
+    "C00003988/,2026-09-15T06:01:24Z\n"
+)
+
+FEC_CANDIDATES = (
+    "cand_id,cand_name,cand_party_affiliation,cand_election_yr,cand_office_st,"
+    "cand_office,cand_office_district,cand_ici,cand_status,cand_pcc,city,state,"
+    "zip,cycle,source_url,source_snapshot\n"
+    "H0NE01146,\"GRACE, DENNIS B.\",LIB,2020,NE,H,01,C,N,C00752485,FREMONT,NE,"
+    "68025,2024,https://www.fec.gov/data/candidate/H0NE01146/,2026-09-15T06:01:24Z\n"
+)
+
+FEC_CONTRIBUTIONS = (
+    "sub_id,cmte_id,cmte_name,amndt_ind,rpt_tp,transaction_tp,entity_tp,name,"
+    "city,state,zip,transaction_dt,transaction_amt,other_id,tran_id,file_num,"
+    "image_num,cycle,source_url,source_snapshot\n"
+    "1,C00003988,NEBRASKA DEMOCRATIC PARTY,N,Q1,15,IND,\"DOE, JANE\",OMAHA,NE,"
+    "68102,20240115,250.00,,T1,1,IMG1,2024,https://docquery.fec.gov/cgi-bin/"
+    "fecimg/?IMG1,2026-09-15T06:01:24Z\n"
+)
+
+
+def test_fec_committee_is_always_an_organization(tmp_path):
+    (tmp_path / "fec_committees_ne.csv").write_text(FEC_COMMITTEES)
+    committees = load_fec_committees(tmp_path)
+    assert committees["C00003988"].entity_type == "organization"
+    assert committees["C00003988"].source == "fec"
+    assert committees["C00003988"].role == "committee"
+    assert committees["C00003988"].sample_url == "https://www.fec.gov/data/committee/C00003988/"
+
+
+def test_fec_candidate_is_always_an_individual(tmp_path):
+    """PLAN.md's Phase 3 line said 'candidates as organizations' -- a real
+    person's name must never be able to auto-merge with a vendor, so this
+    is entity_type='individual' regardless of what the plan originally said."""
+    (tmp_path / "fec_candidates_ne.csv").write_text(FEC_CANDIDATES)
+    candidates = load_fec_candidates(tmp_path)
+    assert candidates["H0NE01146"].entity_type == "individual"
+    assert candidates["H0NE01146"].source == "fec"
+
+
+def test_fec_contributors_empty_when_file_is_header_only(tmp_path):
+    """indiv24.zip hasn't been pulled -- fec_contributions_ne.csv exists but
+    has zero data rows. This must return {} cleanly, not error."""
+    (tmp_path / "fec_contributions_ne.csv").write_text(FEC_CONTRIBUTIONS.splitlines()[0] + "\n")
+    assert load_fec_contributors(tmp_path) == {}
+
+
+def test_fec_individual_contributor_parsed_when_present(tmp_path):
+    (tmp_path / "fec_contributions_ne.csv").write_text(FEC_CONTRIBUTIONS)
+    contributors = load_fec_contributors(tmp_path)
+    assert contributors["DOE, JANE"].entity_type == "individual"
+    assert contributors["DOE, JANE"].total_amount == 250.0

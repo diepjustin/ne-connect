@@ -20,7 +20,7 @@ spanning three spellings in two sources is several rows sharing `entity_id`.
 | `canonical_name` | display name chosen for the whole cluster |
 | `alias` | the raw name as this source published it |
 | `normalized_key` | `resolve/normalize.py` output for `alias` |
-| `source` | `contracts`, `campaign_finance`, `lobbying`, or `disclosures` |
+| `source` | `contracts`, `campaign_finance`, `lobbying`, `disclosures`, or `fec` |
 | `era` | `modern` (2022+) or `pre2022` (Phase 1.2's legacy tables) — only `campaign_finance` has more than one today; every other source's rows are `modern`. One row per (alias, source, era): a donor active in both eras gets two rows, never summed together |
 | `role` | vendor, contributor, principal, etc. — source-specific |
 | `entity_type` | `organization` or `individual` |
@@ -72,19 +72,24 @@ existing reader having to change:
 
 `name, bits, contract_amt, contract_recs, contrib_amt, contrib_recs,
 lobby_recs, lobby_id, aliases, contrib_amt_legacy, contrib_recs_legacy,
-disclosure_recs`
+disclosure_recs, fec_recs`
 
 `bits` is a source bitmask (`contracts=1, campaign_finance=2, lobbying=4,
-disclosures=32` — 8 and 16 are reserved for SoS/FEC, Phase 2/3, not wired in
-yet; see `SOURCE_BITS` in `build_site.py`). `aliases` lists the entity's
-*other* spellings, empty when there's only the one. `lobby_id` is the
-lobbying source's principal id, empty when lobbying isn't one of the entity's
+disclosures=32, fec=16` — 8 is reserved for SoS, Phase 2, blocked; see
+`SOURCE_BITS` in `build_site.py`). `aliases` lists the entity's *other*
+spellings, empty when there's only the one. `lobby_id` is the lobbying
+source's principal id, empty when lobbying isn't one of the entity's
 sources. `contrib_amt`/`contrib_recs` are modern (2022+) campaign-finance
 money only as of Phase 1.4; `contrib_amt_legacy`/`contrib_recs_legacy` is the
 pre-2022 figure. The two are never summed — `build_site.py`'s JS renders them
 as two lines when both are present. `disclosure_recs` (Phase 1.5) is a C-1/C-2
 filer's item count; there is no `disclosure_amt` — a financial disclosure has
-no dollar concept, unlike every other source here.
+no dollar concept, unlike every other source here. `fec_recs` (Phase 3) is a
+committee's or candidate's own record count; there is no `fec_amt` yet —
+`indiv24.zip` (individual itemized contributions, the only FEC dataset with a
+dollar figure) has not been pulled, so a dollar column would misleadingly
+assert "checked, found nothing" rather than "not loaded". See
+`retrieval_dates()`'s `fec_note` for how the page states that gap.
 
 ## `index.html`'s inline payload
 
@@ -137,6 +142,37 @@ confidence as a text-layer or legacy row. Never rewrites the state's own
 words (CLAUDE.md rule 1) — see `DATA_SOURCES.md`'s C-1/C-2 entry for the
 known limitation that a mostly-blank filing's instructional prose can leak
 into `counterparty_name_raw` on the line-fallback extraction path.
+
+## Upstream: `ne-fec`'s processed artifacts
+
+Built and hub-wired 2026-09-15 (`PLAN.md` Phase 3). Local-only repo (no
+GitHub remote); every `source_url` points at fec.gov's own data pages, so
+none of this depends on `ne-fec` ever being published.
+
+`data/fec_committees_ne.csv` (`scripts/normalize.py`): one row per Nebraska
+committee, `cmte_id, cmte_name, treasurer_name, city, state, zip,
+cmte_designation, cmte_type, cmte_party_affiliation, org_type,
+connected_org_name, cand_id, cycle, source_url, source_snapshot`.
+`ingest/sources.py load_fec_committees()` reads this as `source="fec",
+role="committee", entity_type="organization"` always.
+
+`data/fec_candidates_ne.csv`: one row per Nebraska candidate, `cand_id,
+cand_name, cand_party_affiliation, cand_election_yr, cand_office_st,
+cand_office, cand_office_district, cand_ici, cand_status, cand_pcc, city,
+state, zip, cycle, source_url, source_snapshot`. `load_fec_candidates()`
+reads this as `entity_type="individual"` always — a candidate is a real
+person; PLAN.md's original Phase 3 text said "organizations", which would
+have let match.py auto-merge a candidate's name with a vendor's on
+similarity alone. Deviation noted here and in `PLAN.md`.
+
+`data/fec_contributions_ne.csv`: header-only today — `sub_id, cmte_id,
+cmte_name, amndt_ind, rpt_tp, transaction_tp, entity_tp, name, city, state,
+zip, transaction_dt, transaction_amt, other_id, tran_id, file_num,
+image_num, cycle, source_url, source_snapshot`. `indiv24.zip` (4.24 GB,
+individual itemized contributions — the only FEC dataset with real dollar
+figures) is deliberately not pulled yet; `load_fec_contributors()` reads
+whatever rows exist (none today) so it activates automatically once that
+decision changes, with no code to remember to wire in later.
 
 ## Dedup contract, by source
 

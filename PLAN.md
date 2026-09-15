@@ -307,6 +307,27 @@ validated against the real 2024-cycle `cn24.zip`/`cm24.zip` (51 NE candidates,
 that's a real, bounded decision for later, not scaffolding. `ne-fec/` is
 local-only, no GitHub remote. Hub integration (below) not started.
 
+**Hub integration done 2026-09-15** (committees and candidates only —
+`indiv24.zip` still not pulled, see above). `ingest/sources.py`:
+`load_fec_committees()`, `load_fec_candidates()`, `load_fec_contributors()`
+(the last returns `{}` on today's header-only `fec_contributions_ne.csv`
+and activates on its own once `indiv24.zip` lands). **Correction to this
+plan's own text below:** "committees and candidates as organizations" was
+wrong for candidates — a candidate is a real person, so
+`load_fec_candidates()` sets `entity_type="individual"`, which is what
+keeps `match.py`'s person guard from ever auto-merging a candidate's name
+with a vendor's. `build/build_entities.py` wires `fec` into every pairing;
+bit 16 in `build_site.py`'s `SOURCE_BITS`. Verified against the real data:
+148 fec keys, 21 cross-matched with an existing campaign-finance entity
+(Deb Fischer for US Senate, both major Douglas County parties, HDR Inc.'s
+employee PAC, among others). `SOURCE_LABELS["fec"]` reads "FEC Committees &
+Candidates" rather than "Federal Contributions" — there is no `fec_amt`
+column yet, and the page states the `indiv24.zip` gap explicitly
+(`retrieval_dates()`'s `fec_note`, derived from `scrape_meta.json` lacking
+an `"indiv"` key) rather than implying a $0 finding.
+`SOURCE_PROJECTS["fec"]` links to `fec.gov/data/`, not the local-only
+`ne-fec` repo. 113 tests passing in `ne-connect` (8 new, 105→113).
+
 Bulk files per cycle at `https://www.fec.gov/files/bulk-downloads/<YYYY>/`: `indiv<yy>.zip`, `cm<yy>.zip`, `cn<yy>.zip`, optionally `pas2<yy>.zip`, `oth<yy>.zip`; headers from `data_dictionaries/`. No API key, reproducible snapshots.
 
 - `scripts/download_bulk.py` (stream to `data/raw/<cycle>/`, sha256 in `scrape_meta.json`); `scripts/filter_ne.py` (stream-decode; `STATE == "NE"` from indiv, `CMTE_ST == "NE"` from cm, `CAND_ST == "NE" or CAND_OFFICE_ST == "NE"` from cn; never load indiv whole); `scripts/normalize.py` → `fec_contributions_ne.csv`, `fec_committees_ne.csv`, `fec_candidates_ne.csv`; `check_data.py`; `tests/`.

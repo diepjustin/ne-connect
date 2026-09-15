@@ -38,6 +38,9 @@ from sources import (  # noqa: E402
     load_contract_vendors,
     load_contributors,
     load_disclosure_filers,
+    load_fec_candidates,
+    load_fec_committees,
+    load_fec_contributors,
     load_legacy_contributors,
     load_lobbying_aliases,
     load_lobbying_principals,
@@ -111,19 +114,28 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
     # auto-merge; they still search and land in the review queue like any
     # other cross-source name match.
     disclosures = _keyed(load_disclosure_filers())
+    # Committees (organizations) and candidates (individuals -- see
+    # load_fec_candidates()'s docstring on why PLAN.md's "as organizations"
+    # was wrong) merged before keying, same reasoning as contributors' two
+    # eras: neither dict clobbers the other since they're keyed by different
+    # ids (cmte_id vs cand_id) upstream. load_fec_contributors() is empty
+    # today (indiv24.zip not pulled) and simply contributes nothing.
+    fec = _keyed({
+        **load_fec_committees(), **load_fec_candidates(), **load_fec_contributors()
+    })
 
     # IDF is computed over ALL sources, so a token's rarity reflects the whole
     # corpus rather than whichever list happens to be largest.
     index = TokenIndex(
-        list(vendors) + list(contributors) + list(lobbying) + list(disclosures)
+        list(vendors) + list(contributors) + list(lobbying) + list(disclosures) + list(fec)
     )
 
     # Everything the authority pass can see. Contracts and campaign finance
-    # publish no entity id, so in practice only lobbying and disclosures
+    # publish no entity id, so in practice only lobbying, disclosures and fec
     # contribute here -- but the pass is source-agnostic and will pick up any
     # source that does.
     all_parties = {}
-    for keyed in (vendors, contributors, lobbying, disclosures):
+    for keyed in (vendors, contributors, lobbying, disclosures, fec):
         for key, parties in keyed.items():
             all_parties.setdefault(key, []).extend(parties)
 
@@ -148,6 +160,14 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
         ("contracts", vendors, "disclosures", disclosures),
         ("campaign_finance", contributors, "disclosures", disclosures),
         ("lobbying", lobbying, "disclosures", disclosures),
+        # fec mixes organizations (committees) and individuals (candidates,
+        # and contributors once indiv24.zip lands) -- _dominant_type below
+        # already handles a mixed-type key, and involves_person still means
+        # any pairing that resolves to a person only ever reaches review.
+        ("contracts", vendors, "fec", fec),
+        ("campaign_finance", contributors, "fec", fec),
+        ("lobbying", lobbying, "fec", fec),
+        ("disclosures", disclosures, "fec", fec),
     )
     for left_source, left_keyed, right_source, right_keyed in pairings:
         for left, right in candidate_pairs(left_keyed, right_keyed, index):
@@ -202,7 +222,7 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
     clustered = {member for members in clusters.groups().values() for member in members}
     singletons = {
         key
-        for keyed in (vendors, contributors, lobbying, disclosures)
+        for keyed in (vendors, contributors, lobbying, disclosures, fec)
         for key in keyed
         if key not in clustered
     }
@@ -211,13 +231,14 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
 
     entities = []
     for root, members in sorted(groups.items()):
-        display_name = _canonical_name(members, vendors, contributors, lobbying, disclosures)
+        display_name = _canonical_name(members, vendors, contributors, lobbying, disclosures, fec)
         for member in sorted(members):
             for source, keyed in (
                 ("contracts", vendors),
                 ("campaign_finance", contributors),
                 ("lobbying", lobbying),
                 ("disclosures", disclosures),
+                ("fec", fec),
             ):
                 for party in keyed.get(member, []):
                     entities.append(
@@ -265,6 +286,7 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
         "lobbying_keys": len(lobbying),
         "lobbying_principals": len(lobbying_principals),
         "disclosure_filer_keys": len(disclosures),
+        "fec_keys": len(fec),
         "hard_id_links": len(hard_links),
         "entities_in_two_or_more_sources": multi_source,
         "candidates_scored": len(matches),

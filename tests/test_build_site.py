@@ -57,6 +57,61 @@ def test_non_lobbying_entity_has_empty_lobby_id():
     assert index[0][lobby_id_col] == ""
 
 
+def test_fec_entity_carries_a_record_count():
+    rows = _rows(("1", "NEBRASKA DEMOCRATIC PARTY", "NEBRASKA DEMOCRATIC PARTY", "fec", 1, 0.0, "C00003988"))
+    index = build_full_index(rows)
+    fec_recs_col = INDEX_COLUMNS.index("fec_recs")
+    assert index[0][fec_recs_col] == 1
+
+
+def test_non_fec_entity_has_zero_fec_recs():
+    rows = _rows(("1", "ACME CO", "ACME CO", "contracts", 3, 100.0, ""))
+    index = build_full_index(rows)
+    fec_recs_col = INDEX_COLUMNS.index("fec_recs")
+    assert index[0][fec_recs_col] == 0
+
+
+def test_retrieval_dates_notes_missing_indiv_pull(tmp_path, monkeypatch):
+    """committees/candidates are loaded but individual contributions are
+    not (indiv24.zip deliberately not pulled) -- the page must say so rather
+    than let a $0/empty column imply nothing was found."""
+    root = tmp_path / "ne-connect"
+    root.mkdir()
+    fec_dir = tmp_path / "ne-fec" / "data"
+    fec_dir.mkdir(parents=True)
+    (fec_dir / "scrape_meta.json").write_text(
+        json.dumps({"2024": {
+            "cm": {"retrieved_at": "2026-09-15T06:01:16Z"},
+            "cn": {"retrieved_at": "2026-09-15T06:01:13Z"},
+        }})
+    )
+    monkeypatch.setattr(build_site, "ROOT", root)
+
+    dates = retrieval_dates()
+
+    assert dates["fec"] == "2026-09-15"
+    assert "indiv24.zip" in dates["fec_note"]
+
+
+def test_retrieval_dates_no_note_once_indiv_pulled(tmp_path, monkeypatch):
+    root = tmp_path / "ne-connect"
+    root.mkdir()
+    fec_dir = tmp_path / "ne-fec" / "data"
+    fec_dir.mkdir(parents=True)
+    (fec_dir / "scrape_meta.json").write_text(
+        json.dumps({"2024": {
+            "cm": {"retrieved_at": "2026-09-15T06:01:16Z"},
+            "cn": {"retrieved_at": "2026-09-15T06:01:13Z"},
+            "indiv": {"retrieved_at": "2026-09-16T00:00:00Z"},
+        }})
+    )
+    monkeypatch.setattr(build_site, "ROOT", root)
+
+    dates = retrieval_dates()
+
+    assert "fec_note" not in dates
+
+
 def test_retrieval_dates_ignores_non_dataset_shaped_keys(tmp_path, monkeypatch):
     """download_legacy.py's "legacy" key in ne-campaign-finance's
     scrape_meta.json is {source_url, sha256, retrieved_at, path, members} --
