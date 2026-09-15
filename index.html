@@ -4,22 +4,26 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Nebraska Public Records Hub</title>
-<meta name="description" content="Organizations appearing across Nebraska state contracts, campaign finance and lobbying records, with links to the primary source for every figure.">
+<meta name="description" content="Cross-reference a name across Nebraska state contracts, campaign contributions, lobbying registrations, financial disclosures, and federal campaign finance, with a link to the primary record behind every figure.">
 <style>
+  /* Editorial redesign, 2026-09-15 -- serif/sans pairing from system fonts
+     only (Georgia, not a Google Fonts import): the footer below promises
+     "no external fonts... nothing loads from a third party," which matters
+     for a tool a source might search from. A harmonized five-color source
+     palette (same lightness/chroma family, distinct hues) replaces the
+     original ad hoc picks. */
   :root {
-    --bg: #ffffff; --panel: #f6f7f9; --border: #d9dde3; --text: #14181d;
-    --muted: #626b76; --accent: #d00000; --accent-soft: #fdecec;
-    --row-alt: #fafbfc; --shadow: 0 1px 3px rgba(0,0,0,.08);
-    --contracts: #0a6ebd; --finance: #1c7f4e; --lobbying: #7c4dd8;
-    --disclosures: #b8860b; --fec: #a3315c;
+    --bg: #faf8f4; --panel: #f2efe8; --border: #ddd6c8; --text: #211c14;
+    --muted: #6b6252; --accent: #a1291f; --serif: Georgia, "Times New Roman", ui-serif, serif;
+    --contracts: #3b6ea8; --finance: #3b8f63; --lobbying: #7a5fbf;
+    --disclosures: #b08a2e; --fec: #b3486b;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #14171a; --panel: #1c2025; --border: #2c323a; --text: #e6e9ed;
-      --muted: #949dab; --accent: #ff6b6b; --accent-soft: #2a1c1d;
-      --row-alt: #181c20; --shadow: 0 1px 3px rgba(0,0,0,.4);
-      --contracts: #5aa9e6; --finance: #4cc38a; --lobbying: #b08cff;
-      --disclosures: #e0b23d; --fec: #e086a7;
+      --bg: #17140f; --panel: #201c15; --border: #383025; --text: #eee8db;
+      --muted: #a89d88; --accent: #e2695c;
+      --contracts: #7fb0e8; --finance: #7fce9e; --lobbying: #b79eec;
+      --disclosures: #e0b764; --fec: #e58aa8;
     }
   }
   * { box-sizing: border-box; }
@@ -27,123 +31,155 @@
     margin: 0; background: var(--bg); color: var(--text);
     font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   }
-  header { padding: 22px 20px 16px; border-bottom: 1px solid var(--border); }
-  h1 { margin: 0 0 4px; font-size: 21px; letter-spacing: -.01em; }
-  .sub { color: var(--muted); font-size: 13.5px; }
-  .sub p { margin: 0 0 6px; max-width: 82ch; }
+  a { color: var(--accent); }
+  a:hover { color: var(--text); }
+  header { padding: 40px 20px 0; max-width: 900px; margin: 0 auto; }
+  .kicker {
+    font: 600 11.5px/1 inherit; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 14px;
+  }
+  h1 {
+    font: 600 34px/1.15 var(--serif); margin: 0 0 14px; letter-spacing: -.01em;
+    max-width: 15ch;
+  }
+  .sub { color: var(--muted); font-size: 15px; }
+  .sub p { margin: 0 0 10px; max-width: 68ch; }
+  .legend { display: flex; flex-wrap: wrap; gap: 7px 16px; margin: 4px 0 22px; }
+  .legend-item { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; display: inline-block; }
+  .b-contracts { background: var(--contracts); }
+  .b-campaign_finance { background: var(--finance); }
+  .b-lobbying { background: var(--lobbying); }
+  .b-disclosures { background: var(--disclosures); }
+  .b-fec { background: var(--fec); }
   .warn {
-    margin: 12px 0 0; padding: 10px 12px; max-width: 82ch;
-    background: var(--accent-soft); border-left: 3px solid var(--accent);
-    border-radius: 3px; font-size: 13.5px; color: var(--text);
+    margin: 0 0 30px; padding: 13px 15px; max-width: 68ch;
+    border: 1px solid var(--border); border-radius: 4px;
+    font-size: 13.5px; color: var(--muted);
   }
-  .warn strong { color: var(--accent); }
+  .warn strong { color: var(--text); }
   .stats {
-    display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 20px;
-    border-bottom: 1px solid var(--border); background: var(--panel);
+    display: flex; flex-wrap: wrap; gap: 26px; padding: 0 0 26px;
+    border-bottom: 1px solid var(--border); margin-bottom: 22px;
   }
-  .stat {
-    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
-    padding: 8px 12px; min-width: 118px; box-shadow: var(--shadow);
+  .stat b { display: block; font: 600 24px/1 var(--serif); letter-spacing: -.01em; }
+  .stat span {
+    display: block; margin-top: 4px; font-size: 11px; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted);
   }
-  .stat b { display: block; font-size: 19px; letter-spacing: -.02em; }
-  .stat span { color: var(--muted); font-size: 12px; }
   .controls {
-    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
-    padding: 14px 20px; border-bottom: 1px solid var(--border);
+    max-width: 900px; margin: 0 auto; padding: 0 20px;
+    display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin-bottom: 8px;
   }
-  input[type=search], select {
-    font: inherit; padding: 7px 10px; border: 1px solid var(--border);
-    border-radius: 4px; background: var(--bg); color: var(--text);
+  .search { position: relative; flex: 1 1 320px; }
+  .search svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); opacity: .5; pointer-events: none; }
+  input[type=search] {
+    width: 100%; font: inherit; font-size: 15px; padding: 10px 12px 10px 34px;
+    border: 1px solid var(--border); border-radius: 4px; background: var(--panel);
+    color: var(--text);
   }
-  input[type=search] { flex: 1 1 320px; }
-  #count { color: var(--muted); font-size: 13px; }
-  main { padding: 0 20px 60px; }
-  .entity { border-bottom: 1px solid var(--border); padding: 11px 8px; }
-  .entity:nth-child(even) { background: var(--row-alt); }
-  .etop {
-    display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline;
-    cursor: pointer;
+  input[type=search]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .pills { display: flex; flex-wrap: wrap; gap: 6px; }
+  .pill {
+    font: 500 12.5px/1 inherit; padding: 7px 12px; border: 1px solid var(--border);
+    border-radius: 20px; background: transparent; color: var(--muted); cursor: pointer;
   }
-  .ename { font-weight: 600; flex: 1 1 240px; }
-  .badges { display: flex; gap: 5px; flex-wrap: wrap; }
-  .badge {
-    font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
-    padding: 2px 7px; border-radius: 10px; border: 1px solid currentColor;
-    white-space: nowrap;
+  .pill.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+  .pill-contracts.active { background: var(--contracts); border-color: var(--contracts); color: #fff; }
+  .pill-campaign_finance.active { background: var(--finance); border-color: var(--finance); color: #fff; }
+  .pill-lobbying.active { background: var(--lobbying); border-color: var(--lobbying); color: #fff; }
+  .pill-disclosures.active { background: var(--disclosures); border-color: var(--disclosures); color: #fff; }
+  .pill-fec.active { background: var(--fec); border-color: var(--fec); color: #fff; }
+  #count { color: var(--muted); font-size: 12.5px; max-width: 900px; margin: 10px auto 4px; padding: 0 20px; }
+  main { max-width: 900px; margin: 0 auto; padding: 0 20px 60px; }
+  .entity { border-bottom: 1px solid var(--border); padding: 16px 4px; }
+  .etop { display: flex; align-items: baseline; gap: 12px; cursor: pointer; }
+  .chevron { flex: none; transition: transform .15s ease; opacity: .55; margin-top: 2px; }
+  .entity.open .chevron { transform: rotate(90deg); }
+  .ename { font: 600 17px/1.3 var(--serif); flex: 1 1 240px; }
+  .badges { display: flex; gap: 10px; flex-wrap: wrap; }
+  .src-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .id-tag {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px; white-space: nowrap;
   }
-  .b-contracts { color: var(--contracts); }
-  .b-campaign_finance { color: var(--finance); }
-  .b-lobbying { color: var(--lobbying); }
-  .b-disclosures { color: var(--disclosures); }
-  .b-fec { color: var(--fec); }
-  .b-hard { color: var(--muted); }
   .figs {
-    display: flex; gap: 16px; flex-wrap: wrap;
+    display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0 0 26px;
     font-variant-numeric: tabular-nums; font-size: 13.5px;
   }
   .fig span { color: var(--muted); font-size: 11.5px; display: block; }
-  .detail { display: none; padding: 10px 0 2px; font-size: 13.5px; }
+  .detail { display: none; margin: 12px 0 0 26px; padding: 0 0 2px; font-size: 13.5px; max-width: 62ch; }
   .entity.open .detail { display: block; }
   .detail h4 {
-    margin: 0 0 5px; font-size: 12px; text-transform: uppercase;
+    margin: 14px 0 5px; font-size: 11px; text-transform: uppercase;
     letter-spacing: .05em; color: var(--muted); font-weight: 600;
   }
+  .detail h4:first-child { margin-top: 0; }
   .alias { padding: 2px 0; color: var(--muted); }
   .alias b { color: var(--text); font-weight: 500; }
-  .hint { color: var(--muted); font-size: 13px; padding: 14px 8px; }
+  .hint { color: var(--muted); font-size: 13px; padding: 14px 4px; }
   footer {
-    padding: 20px; border-top: 1px solid var(--border);
+    max-width: 900px; margin: 0 auto; padding: 20px; border-top: 1px solid var(--border);
     color: var(--muted); font-size: 13px;
   }
-  footer p { max-width: 82ch; margin: 0 0 8px; }
-  a { color: var(--accent); }
+  footer p { max-width: 68ch; margin: 0 0 8px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Nebraska Public Records Hub</h1>
+  <p class="kicker">Nebraska Public Records Hub</p>
+  <h1>One name. Every record.</h1>
   <div class="sub">
-    <p>Organizations appearing in more than one Nebraska public record set —
-    state contracts, campaign contributions, and lobbying registrations. Every
-    figure comes from one of three collection projects:
-    <a href="../ne-contracts/">Nebraska State Contracts</a> · <a href="../ne-campaign-finance/">Nebraska Campaign Finance</a> · <a href="../ne-lobbying/">Nebraska Lobbying</a> · <a href="https://www.fec.gov/data/">FEC</a>.</p>
+    <p>Cross-reference a name across Nebraska state contracts, campaign
+    contributions, lobbying registrations, financial disclosures, and federal
+    campaign finance &mdash; every figure links to the primary record and the
+    date it was retrieved. Collected by <a href="../ne-contracts/">Nebraska State Contracts</a> · <a href="../ne-campaign-finance/">Nebraska Campaign Finance</a> · <a href="../ne-lobbying/">Nebraska Lobbying</a> · <a href="https://www.fec.gov/data/">FEC</a>.</p>
     <p>Names are matched by normalization and scoring; where a source publishes
     its own identifier, records are joined by that identifier instead. Select a
     row to see every spelling folded into it, and which record set each came from.</p>
-    <div class="warn">
-      <strong>A match is not a finding.</strong> Two records sharing a name is a
-      reason to look, not a story. <strong>No person has confirmed any entity on
-      this page.</strong> 4,474 candidate pairs are
-      still awaiting review, and 0
-      human decisions are on record. Check the primary documents before
-      publishing anything.
-    </div>
+  </div>
+  <div class="legend">
+    <div class="legend-item"><span class="dot b-contracts"></span>Contracts</div>
+    <div class="legend-item"><span class="dot b-campaign_finance"></span>Contributions</div>
+    <div class="legend-item"><span class="dot b-lobbying"></span>Lobbying</div>
+    <div class="legend-item"><span class="dot b-disclosures"></span>Financial Disclosures</div>
+    <div class="legend-item"><span class="dot b-fec"></span>FEC Committees & Candidates</div>
+  </div>
+  <div class="warn">
+    <strong>A match is not a finding.</strong> Two records sharing a name is a
+    reason to look, not a story. <strong>No person has confirmed any entity on
+    this page.</strong> 4,474 candidate pairs are
+    still awaiting review, and 0
+    human decisions are on record. Check the primary documents before
+    publishing anything.
+  </div>
+  <div class="stats">
+    <div class="stat"><b>1,734</b><span>entities</span></div>
+    <div class="stat"><b>1,734</b><span>in 2+ record sets</span></div>
+    <div class="stat"><b>89</b><span>in all three</span></div>
+    <div class="stat"><b>124,177</b><span>name variants folded</span></div>
+    <div class="stat"><b>170</b><span>joined by source ID</span></div>
+    <div class="stat"><b>4,474</b><span>awaiting review</span></div>
   </div>
 </header>
 
-<div class="stats">
-  <div class="stat"><b>1,734</b><span>entities</span></div>
-  <div class="stat"><b>1,734</b><span>in 2+ record sets</span></div>
-  <div class="stat"><b>89</b><span>in all three</span></div>
-  <div class="stat"><b>124,177</b><span>name variants folded</span></div>
-  <div class="stat"><b>170</b><span>joined by source ID</span></div>
-  <div class="stat"><b>4,474</b><span>awaiting review</span></div>
-</div>
-
 <div class="controls">
-  <input type="search" id="q" placeholder="Search an organization, or any of its name variants…" autocomplete="off" autofocus>
-  <select id="filter">
-    <option value="">All entities</option>
-    <option value="3">In all three record sets</option>
-    <option value="2">In two or more</option>
-    <option value="contracts">Has contracts</option>
-    <option value="campaign_finance">Has contributions</option>
-    <option value="lobbying">Has lobbying</option>
-    <option value="disclosures">Has a financial disclosure</option>
-    <option value="fec">Has an FEC committee/candidate record</option>
-  </select>
-  <span id="count"></span>
+  <div class="search">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="search" id="q" placeholder="Search an organization, or any of its name variants…" autocomplete="off" autofocus>
+  </div>
+  <div class="pills" id="pills">
+    <button class="pill active" data-f="">All entities</button>
+    <button class="pill" data-f="3">In all three</button>
+    <button class="pill" data-f="2">In two or more</button>
+    <button class="pill pill-contracts" data-f="contracts">Contracts</button>
+    <button class="pill pill-campaign_finance" data-f="campaign_finance">Contributions</button>
+    <button class="pill pill-lobbying" data-f="lobbying">Lobbying</button>
+    <button class="pill pill-disclosures" data-f="disclosures">Disclosures</button>
+    <button class="pill pill-fec" data-f="fec">FEC</button>
+  </div>
 </div>
+<p id="count"></p>
 
 <main id="list"></main>
 
@@ -214,8 +250,9 @@ const money = n => n >= 1000000000
 
 const list = document.getElementById('list');
 const q = document.getElementById('q');
-const filter = document.getElementById('filter');
+const pills = document.getElementById('pills');
 const count = document.getElementById('count');
+let currentFilter = '';
 
 function esc(s) {
   return String(s).replace(/[&<>"]/g,
@@ -295,8 +332,8 @@ function render(rows, pool) {
     // ORDER, not e.sources: the latter is alphabetical, which would put the
     // badges in a different order than the figures directly beside them.
     const badges = ORDER.filter(s => e.sources.includes(s)).map(s =>
-      '<span class="badge b-' + s + '">' + LABELS[s] + '</span>').join('') +
-      (e.hard_id ? '<span class="badge b-hard">ID</span>' : '');
+      '<span class="src-badge"><span class="dot b-' + s + '"></span>' + LABELS[s] + '</span>').join('') +
+      (e.hard_id ? '<span class="id-tag">ID</span>' : '');
     const aliases = e.aliases.map(a => {
       const label = '<b>' + esc(a.name) + '</b>';
       // Link straight to the state's own record where the source publishes one.
@@ -348,9 +385,11 @@ function render(rows, pool) {
     }
 
     return '<div class="entity">' +
-      '<div class="etop"><div class="ename">' + esc(e.name) + '</div>' +
-      '<div class="badges">' + badges + '</div>' +
-      '<div class="figs">' + figures(e) + '</div></div>' +
+      '<div class="etop">' +
+      '<svg class="chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 15 12 9 18"/></svg>' +
+      '<div class="ename">' + esc(e.name) + '</div>' +
+      '<div class="badges">' + badges + '</div></div>' +
+      '<div class="figs">' + figures(e) + '</div>' +
       '<div class="detail">' +
       '<h4>Why these records are grouped</h4>' + conf +
       '<h4>Name variants folded into this entity</h4>' + aliases +
@@ -429,7 +468,7 @@ async function ensureIndex() {
 
 function apply() {
   const term = q.value.trim().toLowerCase();
-  const f = filter.value;
+  const f = currentFilter;
   // No search term: show the cross-source entities, which are the point of the
   // hub and are already here. A search reaches every entity in every source.
   if (term && !ALL) { ensureIndex(); }
@@ -448,8 +487,14 @@ list.addEventListener('click', ev => {
   const row = ev.target.closest('.entity');
   if (row) row.classList.toggle('open');
 });
+pills.addEventListener('click', ev => {
+  const btn = ev.target.closest('.pill');
+  if (!btn) return;
+  currentFilter = btn.dataset.f;
+  [...pills.children].forEach(b => b.classList.toggle('active', b === btn));
+  apply();
+});
 q.addEventListener('input', apply);
-filter.addEventListener('change', apply);
 apply();
 </script>
 </body>
