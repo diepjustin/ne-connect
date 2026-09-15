@@ -1,6 +1,11 @@
 """Stopgap links set at ingest time. No network, no real data."""
 
-from sources import NADC_CONTRIBUTIONS_SEARCH_URL, load_contributors, load_legacy_contributors
+from sources import (
+    NADC_CONTRIBUTIONS_SEARCH_URL,
+    load_contributors,
+    load_disclosure_filers,
+    load_legacy_contributors,
+)
 
 CONTRIBUTIONS = """source_name,source_type,amount,include_in_total,filer_name,city
 Jane Doe,Individual,100.00,True,Some Committee,Lincoln
@@ -36,3 +41,34 @@ def test_same_name_both_eras_produces_two_distinct_parties(tmp_path):
     assert len(merged) == 2
     assert merged[("Jane Doe", "modern")].total_amount == 100.0
     assert merged[("Jane Doe", "pre2022")].total_amount == 100.0
+
+
+C1_FILINGS = """disclosure_id,year,filer_name_raw,filer_office,filed_method,filing_reason,filed_date,document_url,retrieved_at
+abc-123,2023,JANE DOE,COUNTY COMMISSIONER,Manual,Annual report,2/16/2024,https://example.gov/abc-123,2026-09-15
+"""
+
+FINANCIAL_INTERESTS = """disclosure_id,item_type,counterparty_name_raw,detail,source_url,retrieved_at,ocr
+abc-123,creditor,Some Bank,,https://example.gov/abc-123,2026-09-15,False
+abc-123,income_source,Some Employer,,https://example.gov/abc-123,2026-09-15,False
+"""
+
+
+def test_disclosure_filer_is_always_an_individual(tmp_path):
+    (tmp_path / "c1_filings.csv").write_text(C1_FILINGS)
+    filers = load_disclosure_filers(tmp_path)
+    assert filers["abc-123"].entity_type == "individual"
+    assert filers["abc-123"].source == "disclosures"
+    assert filers["abc-123"].role == "filer"
+
+
+def test_disclosure_filer_record_count_is_item_count(tmp_path):
+    (tmp_path / "c1_filings.csv").write_text(C1_FILINGS)
+    (tmp_path / "financial_interests.csv").write_text(FINANCIAL_INTERESTS)
+    filers = load_disclosure_filers(tmp_path)
+    assert filers["abc-123"].record_count == 2
+
+
+def test_disclosure_filer_links_to_the_real_document(tmp_path):
+    (tmp_path / "c1_filings.csv").write_text(C1_FILINGS)
+    filers = load_disclosure_filers(tmp_path)
+    assert filers["abc-123"].sample_url == "https://example.gov/abc-123"

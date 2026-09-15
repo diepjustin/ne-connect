@@ -39,12 +39,16 @@ OUT_PATH = ROOT / "index.html"
 INDEX_DIR = ROOT / "d"
 INDEX_PATH = INDEX_DIR / "entities.json"
 
-SOURCE_BITS = {"contracts": 1, "campaign_finance": 2, "lobbying": 4}
+# Bits 8 and 16 are reserved for SoS and FEC (PLAN.md Phase 2/3) -- neither is
+# wired into the hub yet, but the numbering is fixed so a later phase never
+# has to shift an existing source's bit.
+SOURCE_BITS = {"contracts": 1, "campaign_finance": 2, "lobbying": 4, "disclosures": 32}
 
 SOURCE_LABELS = {
     "contracts": "Contracts",
     "campaign_finance": "Contributions",
     "lobbying": "Lobbying",
+    "disclosures": "Financial Disclosures",
 }
 
 # Where a reader goes to check a number rather than take it on trust.
@@ -52,6 +56,7 @@ SOURCE_PROJECTS = {
     "contracts": ("../ne-contracts/", "Nebraska State Contracts"),
     "campaign_finance": ("../ne-campaign-finance/", "Nebraska Campaign Finance"),
     "lobbying": ("../ne-lobbying/", "Nebraska Lobbying"),
+    "disclosures": ("../ne-campaign-finance/", "Nebraska Campaign Finance"),
 }
 
 # d/entities.json header. Named, not positional-by-convention: every later
@@ -64,6 +69,9 @@ INDEX_COLUMNS = [
     # contrib_amt/contrib_recs (which are modern/2022+ only as of this
     # phase) -- the two eras are never summed into one figure.
     "contrib_amt_legacy", "contrib_recs_legacy",
+    # Phase 1.5: disclosure filers, item count only -- a C-1 has no dollar
+    # concept, so there is no disclosure_amt column.
+    "disclosure_recs",
 ]
 
 
@@ -109,6 +117,14 @@ def retrieval_dates():
     lobbying_meta = ROOT.parent / "ne-lobbying" / "data" / "scrape_progress.json"
     if lobbying_meta.exists():
         dates["lobbying"] = json.loads(lobbying_meta.read_text()).get("last_run", "")
+
+    # C-1 filings carry their own retrieved_at per row rather than a separate
+    # scrape_meta.json -- read the newest one directly.
+    c1_filings = ROOT.parent / "ne-campaign-finance" / "data" / "processed" / "c1_filings.csv"
+    if c1_filings.exists():
+        with c1_filings.open(encoding="utf-8", newline="") as fh:
+            stamps = [row["retrieved_at"] for row in csv.DictReader(fh) if row.get("retrieved_at")]
+        dates["disclosures"] = max(stamps) if stamps else ""
     return dates
 
 
@@ -269,6 +285,7 @@ def build_full_index(rows):
         finance_modern = era_totals["modern"]
         finance_legacy = era_totals["pre2022"]
         lobbying = totals["lobbying"]
+        disclosures = totals["disclosures"]
         name = members[0]["canonical_name"]
         other_aliases = sorted({m["alias"] for m in members} - {name})
         index.append([
@@ -279,6 +296,7 @@ def build_full_index(rows):
             lobby_id,
             other_aliases,
             round(finance_legacy[1]), finance_legacy[0],
+            disclosures[0],
         ])
     index.sort(key=lambda e: (-bin(e[1]).count("1"), -e[2], e[0]))
     return index
@@ -318,8 +336,12 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
             "Completing the sweep would add entities and connections, not remove them."
         )
 
+    # Dedupe by (url, label): disclosures shares ne-campaign-finance's project
+    # link (same repo, different pipeline) rather than getting its own, so a
+    # naive join would print "Nebraska Campaign Finance" twice.
+    unique_projects = dict.fromkeys(SOURCE_PROJECTS.values())
     source_links = " · ".join(
-        f'<a href="{url}">{label}</a>' for url, label in SOURCE_PROJECTS.values()
+        f'<a href="{url}">{label}</a>' for url, label in unique_projects
     )
 
     return f"""<!DOCTYPE html>
@@ -335,6 +357,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
     --muted: #626b76; --accent: #d00000; --accent-soft: #fdecec;
     --row-alt: #fafbfc; --shadow: 0 1px 3px rgba(0,0,0,.08);
     --contracts: #0a6ebd; --finance: #1c7f4e; --lobbying: #7c4dd8;
+    --disclosures: #b8860b;
   }}
   @media (prefers-color-scheme: dark) {{
     :root {{
@@ -342,6 +365,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
       --muted: #949dab; --accent: #ff6b6b; --accent-soft: #2a1c1d;
       --row-alt: #181c20; --shadow: 0 1px 3px rgba(0,0,0,.4);
       --contracts: #5aa9e6; --finance: #4cc38a; --lobbying: #b08cff;
+      --disclosures: #e0b23d;
     }}
   }}
   * {{ box-sizing: border-box; }}
@@ -396,6 +420,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
   .b-contracts {{ color: var(--contracts); }}
   .b-campaign_finance {{ color: var(--finance); }}
   .b-lobbying {{ color: var(--lobbying); }}
+  .b-disclosures {{ color: var(--disclosures); }}
   .b-hard {{ color: var(--muted); }}
   .figs {{
     display: flex; gap: 16px; flex-wrap: wrap;
@@ -459,6 +484,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
     <option value="contracts">Has contracts</option>
     <option value="campaign_finance">Has contributions</option>
     <option value="lobbying">Has lobbying</option>
+    <option value="disclosures">Has a financial disclosure</option>
   </select>
   <span id="count"></span>
 </div>
@@ -494,7 +520,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
 <script>
 const ENTITIES = {payload};          // cross-source, inline, shown by default
 const TOTAL_INDEXED = {total_indexed};
-const BITS = {{contracts: 1, campaign_finance: 2, lobbying: 4}};
+const BITS = {{contracts: 1, campaign_finance: 2, lobbying: 4, disclosures: 32}};
 let ALL = null;                      // the other ~78,000, fetched on first search
 let loading = false;
 const LABELS = {json.dumps(SOURCE_LABELS)};
@@ -511,6 +537,11 @@ const SOURCE_LINK = {{
   lobbying: (name, lobbyId) => lobbyId
     ? 'https://nebraskalegislature.gov/lobbyist/view.php?link=view_principal&id=' + lobbyId
     : '',
+  // No dedicated search page for disclosure filers yet -- ne-campaign-finance's
+  // ?q= search only indexes contributors/filers, not C-1 disclosures. Empty
+  // string falls back to PROJECTS.disclosures (the project's home page)
+  // rather than link somewhere that would not actually find this name.
+  disclosures: () => '',
 }};
 
 // Contract totals run past a billion -- Hawkins Construction alone is $1.28B
@@ -556,6 +587,13 @@ function figures(e) {{
   return ORDER.filter(s => e.totals[s]).map(s => {{
     if (s === 'campaign_finance') return campaignFinanceFigures(e);
     const t = e.totals[s];
+    // Disclosures have no dollar concept at all -- a C-1 reports interests
+    // and relationships, not money. Item count only, never a "$0" that would
+    // misleadingly imply nothing was disclosed.
+    if (s === 'disclosures') {{
+      return '<div class="fig">' + t.records.toLocaleString() +
+        '<span>' + LABELS[s] + ' · items disclosed · self-reported</span></div>';
+    }}
     // Lobbying is counted in registered positions, and carries a dollar figure
     // only where the principal's Form C has been collected. An entity with no
     // figure has not been swept yet -- which is not the same as having spent
@@ -661,6 +699,7 @@ function widen(row) {{
   if (bits & BITS.contracts) sources.push('contracts');
   if (bits & BITS.campaign_finance) sources.push('campaign_finance');
   if (bits & BITS.lobbying) sources.push('lobbying');
+  if (bits & BITS.disclosures) sources.push('disclosures');
   const totals = {{}};
   const contribEras = {{}};
   if (bits & BITS.contracts) {{
@@ -679,6 +718,9 @@ function widen(row) {{
   }}
   if (bits & BITS.lobbying) {{
     totals.lobbying = {{records: row[COL.lobby_recs]}};
+  }}
+  if (bits & BITS.disclosures) {{
+    totals.disclosures = {{records: row[COL.disclosure_recs], amount: 0}};
   }}
   const name = row[COL.name];
   const lobbyId = row[COL.lobby_id];

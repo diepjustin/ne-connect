@@ -23,6 +23,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 CONTRACTS_DATA = REPO_ROOT / "ne-contracts" / "data"
 CAMPAIGN_FINANCE_DATA = REPO_ROOT / "ne-campaign-finance" / "data" / "processed"
 LOBBYING_DATA = REPO_ROOT / "ne-lobbying" / "data"
+# C-1/C-2 financial disclosures live in the same processed/ dir as campaign
+# finance -- same repo (ne-campaign-finance), different pipeline.
+DISCLOSURES_DATA = REPO_ROOT / "ne-campaign-finance" / "data" / "processed"
 
 CONTRACT_FILES = ("nu_contracts.csv", "nu_purchase_orders.csv", "state_agencies.csv")
 
@@ -328,3 +331,57 @@ def load_lobbying_aliases(data_dir: Path = None):
                 if row.get("id") and row.get("name"):
                     aliases[row["id"]].add(row["name"].strip())
     return aliases
+
+
+def load_disclosure_filers(data_dir: Path = None):
+    """C-1/C-2 financial-interest filers, keyed by disclosure_id.
+
+    entity_type="individual" always -- these are public officials filing a
+    disclosure, not organizations (PLAN.md Phase 1.5). Individuals never
+    auto-merge (resolve/match.py's involves_person guard), so listing them
+    here is safe: they become searchable and land in the review queue like
+    any cross-source person match, but nothing merges them automatically.
+
+    Deliberately does NOT ingest financial_interests.csv's
+    counterparty_name_raw as organizations yet. A real check of the data this
+    scraper produced (2026-09-15) found several item types -- real_property,
+    other_financial_interest, gift -- whose text is extracted by a line-
+    fallback parser that, on a mostly-blank filing, picks up the form's own
+    instructional boilerplate ("personal residence need not be reported.")
+    as if it were a filer's actual answer. Shipping that into
+    canonical_entities.csv would put fake "organizations" in a public search
+    index. Only income_source/business_association/creditor use a more
+    reliable numbered-entry parser, but splitting by item_type here felt
+    like exactly the kind of judgment call this project defers to a human
+    rather than making silently -- see ne-campaign-finance's
+    build_financial_interests.py for the item-type breakdown.
+    """
+    data_dir = Path(data_dir or DISCLOSURES_DATA)
+    filings_path = data_dir / "c1_filings.csv"
+    items_path = data_dir / "financial_interests.csv"
+    filers = {}
+    if not filings_path.exists():
+        return filers
+
+    with filings_path.open(encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh):
+            disclosure_id = (row.get("disclosure_id") or "").strip()
+            name = (row.get("filer_name_raw") or "").strip()
+            if not disclosure_id or not name:
+                continue
+            filers[disclosure_id] = Party(
+                name=name,
+                source="disclosures",
+                role="filer",
+                entity_type="individual",
+                source_id=disclosure_id,
+                sample_url=(row.get("document_url") or "").strip(),
+            )
+
+    if items_path.exists():
+        with items_path.open(encoding="utf-8", newline="") as fh:
+            for row in csv.DictReader(fh):
+                party = filers.get((row.get("disclosure_id") or "").strip())
+                if party:
+                    party.record_count += 1
+    return filers

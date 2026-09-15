@@ -37,6 +37,7 @@ from resolutions import Ledger, UnionFind  # noqa: E402
 from sources import (  # noqa: E402
     load_contract_vendors,
     load_contributors,
+    load_disclosure_filers,
     load_legacy_contributors,
     load_lobbying_aliases,
     load_lobbying_principals,
@@ -103,16 +104,26 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
     contributors = _keyed({**load_contributors(), **load_legacy_contributors()})
     lobbying_principals = load_lobbying_principals()
     lobbying = _keyed_lobbying(lobbying_principals, load_lobbying_aliases())
+    # Filers only, never counterparty orgs -- see load_disclosure_filers()'s
+    # docstring for the real data-quality finding that kept this scoped to
+    # just the filers for now. entity_type is always "individual", so
+    # match.py's involves_person guard already means these can never
+    # auto-merge; they still search and land in the review queue like any
+    # other cross-source name match.
+    disclosures = _keyed(load_disclosure_filers())
 
     # IDF is computed over ALL sources, so a token's rarity reflects the whole
     # corpus rather than whichever list happens to be largest.
-    index = TokenIndex(list(vendors) + list(contributors) + list(lobbying))
+    index = TokenIndex(
+        list(vendors) + list(contributors) + list(lobbying) + list(disclosures)
+    )
 
     # Everything the authority pass can see. Contracts and campaign finance
-    # publish no entity id, so in practice only lobbying contributes here --
-    # but the pass is source-agnostic and will pick up any source that does.
+    # publish no entity id, so in practice only lobbying and disclosures
+    # contribute here -- but the pass is source-agnostic and will pick up any
+    # source that does.
     all_parties = {}
-    for keyed in (vendors, contributors, lobbying):
+    for keyed in (vendors, contributors, lobbying, disclosures):
         for key, parties in keyed.items():
             all_parties.setdefault(key, []).extend(parties)
 
@@ -131,6 +142,12 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
         ("contracts", vendors, "campaign_finance", contributors),
         ("contracts", vendors, "lobbying", lobbying),
         ("campaign_finance", contributors, "lobbying", lobbying),
+        # Disclosure filers are individuals (see load_disclosure_filers()),
+        # so match.py's involves_person guard means none of these three ever
+        # auto-accept -- they only ever reach the review queue.
+        ("contracts", vendors, "disclosures", disclosures),
+        ("campaign_finance", contributors, "disclosures", disclosures),
+        ("lobbying", lobbying, "disclosures", disclosures),
     )
     for left_source, left_keyed, right_source, right_keyed in pairings:
         for left, right in candidate_pairs(left_keyed, right_keyed, index):
@@ -152,7 +169,14 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
             if match.decision == "reject":
                 continue
             row = match.as_row()
-            row.update(_money_columns(vendors.get(left, []), contributors.get(right, [])))
+            # Real pre-existing bug, fixed while extending this loop to more
+            # pairings: this used to hardcode vendors.get(left)/
+            # contributors.get(right) regardless of which two dicts the
+            # current pairing actually is, so every pairing involving
+            # lobbying silently showed contribution_total/contract_total as
+            # 0 for whichever side wasn't literally vendors or contributors.
+            # left_keyed/right_keyed are this pairing's real dicts.
+            row.update(_money_columns(left_keyed.get(left, []), right_keyed.get(right, [])))
             row["left_source"] = left_source
             row["right_source"] = right_source
             row["vendor_names"] = " | ".join(sorted({p.name for p in left_keyed[left]}))
@@ -178,7 +202,7 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
     clustered = {member for members in clusters.groups().values() for member in members}
     singletons = {
         key
-        for keyed in (vendors, contributors, lobbying)
+        for keyed in (vendors, contributors, lobbying, disclosures)
         for key in keyed
         if key not in clustered
     }
@@ -187,12 +211,13 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
 
     entities = []
     for root, members in sorted(groups.items()):
-        display_name = _canonical_name(members, vendors, contributors, lobbying)
+        display_name = _canonical_name(members, vendors, contributors, lobbying, disclosures)
         for member in sorted(members):
             for source, keyed in (
                 ("contracts", vendors),
                 ("campaign_finance", contributors),
                 ("lobbying", lobbying),
+                ("disclosures", disclosures),
             ):
                 for party in keyed.get(member, []):
                     entities.append(
@@ -239,6 +264,7 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
         "contributor_keys": len(contributors),
         "lobbying_keys": len(lobbying),
         "lobbying_principals": len(lobbying_principals),
+        "disclosure_filer_keys": len(disclosures),
         "hard_id_links": len(hard_links),
         "entities_in_two_or_more_sources": multi_source,
         "candidates_scored": len(matches),

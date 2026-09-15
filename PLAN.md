@@ -247,7 +247,18 @@ ingestion (the "Hub:" bullet below, `d/rows.json` wiring) still open.
   retrieved_at`), with `document_url` already resolvable without a second
   scrape. Every filing gets a link even before parsing.
 - PDF parsing (decided: parse, post-2022-07-11 filings only now): reuse `ne-contracts/scripts/extract_text.py`'s pypdf + pdfminer path (`:52-53`) for text-layer PDFs; for scanned ones run the OCR pilot ne-contracts scoped but never ran (`ne-contracts/README.md:1057`). **Check a handful of these PDFs for a text layer before committing to a pipeline** — the file size and the "DocumentImagePopup" name both suggest scanned images are the common case here, not the fallback, which would make OCR quality the actual bottleneck rather than a hedge. Output `financial_interests.csv` (`disclosure_id, item_type, counterparty_name_raw, detail, source_url, retrieved_at`) with the state's text verbatim, `era` column matching 1.2/1.4's convention. Raw PDFs immutable under `data/raw/c1/`.
-- Hub: source `"disclosures"`, bit 32 (reserve 8 = SoS, 16 = FEC now). Counterparty orgs as role `counterparty`; filers as `entity_type="individual"` so they search but never auto-merge (`match.py:decide`).
+- Hub: source `"disclosures"`, bit 32 (reserve 8 = SoS, 16 = FEC now). **Filers
+  done 2026-09-15** (`entity_type="individual"` so they search but never
+  auto-merge, `match.py:decide` — verified live, 2 real cross-source
+  connections found: Jon Abegglen and Misty Ahmic, both disclosure filers who
+  are also campaign contributors). **Counterparty orgs deliberately not
+  ingested yet** — `financial_interests.csv`'s line-fallback item types
+  (`real_property`, `other_financial_interest`, `gift`) can surface the C-1
+  form's own instructional boilerplate as a counterparty name (a real check
+  found `"personal residence need not be reported."` as a sample value);
+  shipping that as an organization into `canonical_entities.csv` would be a
+  real data-quality bug, not just a caveat. Revisit once item-type-aware
+  ingestion (or a parser fix) exists.
 
 Tests: `test_normalize_legacy.py` (header gate, dedupe count, era, idempotency); `test_build_site.py` for the search index shape and `?q=`; `ne-connect/tests/test_era.py`; C-1 parser tests from trimmed HTML and a fixture PDF.
 **1.6 Workflow**: extend `ne-campaign-finance-daily.yml` with the legacy sha check, `scrape_c1.py --new-only`, and `build_site.py`; then `ne-connect-nightly.yml` (see Automation notes) since the hub now has two automated inputs plus contracts.

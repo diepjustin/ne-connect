@@ -20,7 +20,7 @@ spanning three spellings in two sources is several rows sharing `entity_id`.
 | `canonical_name` | display name chosen for the whole cluster |
 | `alias` | the raw name as this source published it |
 | `normalized_key` | `resolve/normalize.py` output for `alias` |
-| `source` | `contracts`, `campaign_finance`, or `lobbying` |
+| `source` | `contracts`, `campaign_finance`, `lobbying`, or `disclosures` |
 | `era` | `modern` (2022+) or `pre2022` (Phase 1.2's legacy tables) — only `campaign_finance` has more than one today; every other source's rows are `modern`. One row per (alias, source, era): a donor active in both eras gets two rows, never summed together |
 | `role` | vendor, contributor, principal, etc. — source-specific |
 | `entity_type` | `organization` or `individual` |
@@ -71,16 +71,20 @@ Header-driven so a later phase (SoS, FEC) can append a column without any
 existing reader having to change:
 
 `name, bits, contract_amt, contract_recs, contrib_amt, contrib_recs,
-lobby_recs, lobby_id, aliases, contrib_amt_legacy, contrib_recs_legacy`
+lobby_recs, lobby_id, aliases, contrib_amt_legacy, contrib_recs_legacy,
+disclosure_recs`
 
-`bits` is a source bitmask (`contracts=1, campaign_finance=2, lobbying=4`,
-see `SOURCE_BITS` in `build_site.py`). `aliases` lists the entity's *other*
-spellings, empty when there's only the one. `lobby_id` is the lobbying
-source's principal id, empty when lobbying isn't one of the entity's sources.
-`contrib_amt`/`contrib_recs` are modern (2022+) campaign-finance money only as
-of Phase 1.4; `contrib_amt_legacy`/`contrib_recs_legacy` is the pre-2022
-figure. The two are never summed — `build_site.py`'s JS renders them as two
-lines when both are present.
+`bits` is a source bitmask (`contracts=1, campaign_finance=2, lobbying=4,
+disclosures=32` — 8 and 16 are reserved for SoS/FEC, Phase 2/3, not wired in
+yet; see `SOURCE_BITS` in `build_site.py`). `aliases` lists the entity's
+*other* spellings, empty when there's only the one. `lobby_id` is the
+lobbying source's principal id, empty when lobbying isn't one of the entity's
+sources. `contrib_amt`/`contrib_recs` are modern (2022+) campaign-finance
+money only as of Phase 1.4; `contrib_amt_legacy`/`contrib_recs_legacy` is the
+pre-2022 figure. The two are never summed — `build_site.py`'s JS renders them
+as two lines when both are present. `disclosure_recs` (Phase 1.5) is a C-1/C-2
+filer's item count; there is no `disclosure_amt` — a financial disclosure has
+no dollar concept, unlike every other source here.
 
 ## `index.html`'s inline payload
 
@@ -90,11 +94,24 @@ verbosity costs nothing and buys richer per-alias detail (each alias's own
 `sources` and `url`) than the lazy index carries. Built by
 `build_site.py build_entities()`; see that function for the exact shape.
 
-## Upstream: `ne-campaign-finance`'s C-1/C-2 artifacts (not yet ingested here)
+## Upstream: `ne-campaign-finance`'s C-1/C-2 artifacts
 
-Built 2026-09-15 (`PLAN.md` 1.5). Not yet read by `ingest/sources.py` or
-`build/build_entities.py` — that wiring is a later phase — but documented here
-so the columns are on record before that ingest is written.
+Built 2026-09-15 (`PLAN.md` 1.5). `c1_filings.csv` (filers) is read by
+`ingest/sources.py load_disclosure_filers()` as of Phase 1.5's hub
+integration, also 2026-09-15 — `source="disclosures"`, `role="filer"`,
+`entity_type="individual"` always, so match.py's person guard means these
+never auto-merge. `financial_interests.csv` (counterparty organizations named
+*in* a disclosure) is deliberately **not** ingested yet: a real check of that
+scraper's output found several item types (`real_property`,
+`other_financial_interest`, `gift`) whose text comes from a line-fallback
+parser that can pick up the form's own instructional boilerplate as if it
+were a filer's actual answer (e.g. `"personal residence need not be
+reported."`) — shipping that into `canonical_entities.csv` would put fake
+organizations in a public search index. `income_source`/
+`business_association`/`creditor` use a more reliable numbered-entry parser,
+but splitting ingestion by item_type felt like a judgment call worth a human
+decision rather than a silent overnight default; see
+`load_disclosure_filers()`'s docstring.
 
 `data/processed/c1_filings.csv` (`scripts/scrape_c1.py`): one row per C-1/C-2
 filing found in the NADC search grid, `disclosure_id, year, filer_name_raw,
