@@ -56,6 +56,11 @@ class Party:
     # contracts and campaign finance do not, which is precisely why those two
     # have to be matched by name. See resolve/authority.py.
     source_id: str = ""
+    # "modern" (2022+) or "pre2022" (Phase 1.2's legacy tables). Same source,
+    # same role, same hub bit either way -- era is a property of the record,
+    # not a different source. Only campaign_finance has more than one era
+    # today; every other source defaults to "modern" and means it literally.
+    era: str = "modern"
 
 
 def _money(raw: str) -> float:
@@ -98,14 +103,22 @@ def load_contract_vendors(data_dir: Path = None):
     return vendors
 
 
-def load_contributors(data_dir: Path = None):
-    """Campaign contributors, keyed by raw source name.
+def load_contributors(data_dir: Path = None, *, filename: str = "contributions.csv",
+                       era: str = "modern"):
+    """Campaign contributors, keyed by (raw source name, era).
 
     Individuals and organizations both, distinguished by entity_type -- the
     caller decides how much corroboration each demands.
+
+    Keyed by (name, era) rather than bare name so the same donor name in both
+    eras produces two distinct Party records rather than one clobbering the
+    other -- Phase 1.4's canonical_entities.csv wants one row per
+    (alias, source, era), and that split has to survive from here through
+    build_entities.py's _keyed(), which only ever sees Party.name/.era, not
+    this dict's own keys.
     """
     data_dir = data_dir or CAMPAIGN_FINANCE_DATA
-    path = data_dir / "contributions.csv"
+    path = data_dir / filename
     contributors = {}
     if not path.exists():
         return contributors
@@ -117,12 +130,14 @@ def load_contributors(data_dir: Path = None):
             name = (row.get("source_name") or "").strip()
             if not name:
                 continue
-            party = contributors.get(name)
+            key = (name, era)
+            party = contributors.get(key)
             if party is None:
-                party = contributors[name] = Party(
+                party = contributors[key] = Party(
                     name=name,
                     source="campaign_finance",
                     role="contributor",
+                    era=era,
                     entity_type=(
                         "individual" if row.get("source_type") == "Individual" else "organization"
                     ),
@@ -140,6 +155,17 @@ def load_contributors(data_dir: Path = None):
             if city:
                 party.cities.add(city)
     return contributors
+
+
+def load_legacy_contributors(data_dir: Path = None):
+    """Pre-2022 campaign contributors from Phase 1.2's contributions_legacy.csv.
+
+    Same shape as load_contributors(), just pointed at the legacy table with
+    era="pre2022". A thin wrapper because Phase 1.4's spec names it
+    explicitly as its own function, distinct from passing filename/era by
+    hand at every call site.
+    """
+    return load_contributors(data_dir, filename="contributions_legacy.csv", era="pre2022")
 
 
 def structured_contributor_names(data_dir: Path = None):

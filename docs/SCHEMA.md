@@ -21,6 +21,7 @@ spanning three spellings in two sources is several rows sharing `entity_id`.
 | `alias` | the raw name as this source published it |
 | `normalized_key` | `resolve/normalize.py` output for `alias` |
 | `source` | `contracts`, `campaign_finance`, or `lobbying` |
+| `era` | `modern` (2022+) or `pre2022` (Phase 1.2's legacy tables) — only `campaign_finance` has more than one today; every other source's rows are `modern`. One row per (alias, source, era): a donor active in both eras gets two rows, never summed together |
 | `role` | vendor, contributor, principal, etc. — source-specific |
 | `entity_type` | `organization` or `individual` |
 | `records` | row count behind this alias in its source |
@@ -70,12 +71,16 @@ Header-driven so a later phase (SoS, FEC) can append a column without any
 existing reader having to change:
 
 `name, bits, contract_amt, contract_recs, contrib_amt, contrib_recs,
-lobby_recs, lobby_id, aliases`
+lobby_recs, lobby_id, aliases, contrib_amt_legacy, contrib_recs_legacy`
 
 `bits` is a source bitmask (`contracts=1, campaign_finance=2, lobbying=4`,
 see `SOURCE_BITS` in `build_site.py`). `aliases` lists the entity's *other*
 spellings, empty when there's only the one. `lobby_id` is the lobbying
 source's principal id, empty when lobbying isn't one of the entity's sources.
+`contrib_amt`/`contrib_recs` are modern (2022+) campaign-finance money only as
+of Phase 1.4; `contrib_amt_legacy`/`contrib_recs_legacy` is the pre-2022
+figure. The two are never summed — `build_site.py`'s JS renders them as two
+lines when both are present.
 
 ## `index.html`'s inline payload
 

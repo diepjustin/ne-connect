@@ -37,6 +37,7 @@ from resolutions import Ledger, UnionFind  # noqa: E402
 from sources import (  # noqa: E402
     load_contract_vendors,
     load_contributors,
+    load_legacy_contributors,
     load_lobbying_aliases,
     load_lobbying_principals,
 )
@@ -95,7 +96,11 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
     ledger = Ledger.load(ledger_path or LEDGER_PATH)
 
     vendors = _keyed(load_contract_vendors())
-    contributors = _keyed(load_contributors())
+    # Both eras merged before keying: load_contributors() now keys its own
+    # dict by (name, era), so a donor who gave in both eras produces two
+    # distinct Party objects here rather than one clobbering the other --
+    # see sources.py's load_contributors() docstring.
+    contributors = _keyed({**load_contributors(), **load_legacy_contributors()})
     lobbying_principals = load_lobbying_principals()
     lobbying = _keyed_lobbying(lobbying_principals, load_lobbying_aliases())
 
@@ -197,6 +202,7 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
                             "alias": party.name,
                             "normalized_key": member,
                             "source": source,
+                            "era": party.era,
                             "role": party.role,
                             "entity_type": party.entity_type,
                             "records": party.record_count,

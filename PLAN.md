@@ -178,10 +178,23 @@ Verified live in-browser: search, filer/contributor expansion, individual vs.
 organization presentation, `?q=` deep-linking. 61 tests in
 `ne-campaign-finance` (4 new), 99 in `ne-connect`.
 
-**1.4 Hub ingest with `era`**
-- `ingest/sources.py`: `era: str = "modern"` on `Party` (`:28-45`); `load_contributors(..., filename, era)`; `load_legacy_contributors()`. Same source, role, bit 2: era is a property of the record.
-- `build_entities.py`: key both eras; `era` column in `canonical_entities.csv`, one row per (alias, source, era).
-- `build_site.py`: new named columns `contrib_amt_legacy`, `contrib_recs_legacy`; inline totals `{modern:{}, pre2022:{}}`; rendered as two lines, never summed; `retrieval_dates()` adds a "pre-2022 data frozen by the state" note.
+**1.4 Hub ingest with `era`** — done. `Party.era` (default `"modern"`);
+`load_contributors()` keys its dict by `(name, era)` so the same donor in both
+eras never clobbers itself; `load_legacy_contributors()` wraps it for
+`contributions_legacy.csv`. `build_entities.py` merges both eras before
+keying; `era` column lands in `canonical_entities.csv`. `build_site.py`: inline
+entities carry `contrib_eras` (rendered as two lines, never summed, when both
+present); the lazy index gained `contrib_amt_legacy`/`contrib_recs_legacy`
+columns; `retrieval_dates()` adds the frozen-data note, surfaced next to the
+Contributions provenance line whenever an entity has pre-2022 money. Verified
+live: 107,146 canonical entities (up from 79,351), 5,627 with both
+campaign-finance eras, both the inline (Hawkins Construction Company) and
+lazy-index (055 - FAST PLAZA, LLC) rendering paths checked in-browser with no
+console errors. `d/entities.json` is now 5.28 MB raw / 1.37 MB gzipped — over
+0.6's original 4 MB raw budget (that budget predates the legacy data almost
+doubling the contributor count); gzipped size is what actually ships over the
+wire and is still small, but the raw-size note in 0.6 should be revisited.
+99→102 tests passing.
 
 **1.5 C-1 / C-2 statements of financial interest, `scripts/scrape_c1.py`** — scraper,
 PDF pipeline and legacy normalizer done 2026-09-15 (`ne-campaign-finance`); hub

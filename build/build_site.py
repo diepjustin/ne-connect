@@ -60,6 +60,10 @@ SOURCE_PROJECTS = {
 INDEX_COLUMNS = [
     "name", "bits", "contract_amt", "contract_recs",
     "contrib_amt", "contrib_recs", "lobby_recs", "lobby_id", "aliases",
+    # Phase 1.4: pre-2022 campaign-finance money, tracked separately from
+    # contrib_amt/contrib_recs (which are modern/2022+ only as of this
+    # phase) -- the two eras are never summed into one figure.
+    "contrib_amt_legacy", "contrib_recs_legacy",
 ]
 
 
@@ -90,6 +94,17 @@ def retrieval_dates():
             for r in rs
         ]
         dates["campaign_finance"] = max(stamps) if stamps else ""
+        # Phase 1.4: the pre-2022 era is a one-time capture of a dataset the
+        # state itself has stopped updating (see download_legacy.py), not a
+        # recurring pull -- "retrieved" reads as misleadingly fresh without
+        # saying so explicitly.
+        legacy = runs.get("legacy") or {}
+        if legacy.get("retrieved_at"):
+            dates["campaign_finance_legacy"] = legacy["retrieved_at"]
+            dates["campaign_finance_legacy_note"] = (
+                "pre-2022 data frozen by the state as of 2022-07-11 -- "
+                "this is a one-time capture, not a recurring pull"
+            )
 
     lobbying_meta = ROOT.parent / "ne-lobbying" / "data" / "scrape_progress.json"
     if lobbying_meta.exists():
@@ -146,11 +161,21 @@ def build_entities():
         if len({m["source"] for m in members}) < 2:
             continue
         totals = defaultdict(lambda: {"records": 0, "amount": 0.0})
+        # Phase 1.4: campaign_finance is the only source with more than one
+        # era today. Tracked separately from `totals` (which stays the
+        # combined figure every other source already expects) so the two
+        # eras can be rendered as two lines and never silently summed --
+        # pre-2022 money and 2022+ money are not the same claim.
+        era_totals = defaultdict(lambda: {"records": 0, "amount": 0.0})
         aliases = {}
         for member in members:
             source = member["source"]
             totals[source]["records"] += int(member["records"] or 0)
             totals[source]["amount"] += float(member["amount"] or 0)
+            if source == "campaign_finance":
+                era = member.get("era") or "modern"
+                era_totals[era]["records"] += int(member["records"] or 0)
+                era_totals[era]["amount"] += float(member["amount"] or 0)
             # One row per distinct spelling, remembering where it was seen.
             aliases.setdefault(member["alias"], {"sources": set(), "url": ""})
             aliases[member["alias"]]["sources"].add(source)
@@ -168,6 +193,10 @@ def build_entities():
                         "amount": round(value["amount"], 2),
                     }
                     for source, value in totals.items()
+                },
+                "contrib_eras": {
+                    era: {"records": value["records"], "amount": round(value["amount"], 2)}
+                    for era, value in era_totals.items()
                 },
                 "aliases": [
                     {"name": name, "sources": sorted(a["sources"]), "url": a["url"]}
@@ -221,25 +250,35 @@ def build_full_index(rows):
     for members in grouped.values():
         bits = 0
         totals = defaultdict(lambda: [0, 0.0])
+        # Phase 1.4: campaign_finance split by era so the lazy index can
+        # render pre-2022 money separately, same reasoning as the inline
+        # index's contrib_eras -- never summed into one figure.
+        era_totals = defaultdict(lambda: [0, 0.0])
         lobby_id = ""
         for member in members:
             bits |= SOURCE_BITS[member["source"]]
             totals[member["source"]][0] += int(member["records"] or 0)
             totals[member["source"]][1] += float(member["amount"] or 0)
+            if member["source"] == "campaign_finance":
+                era = member.get("era") or "modern"
+                era_totals[era][0] += int(member["records"] or 0)
+                era_totals[era][1] += float(member["amount"] or 0)
             if member["source"] == "lobbying" and member.get("source_id"):
                 lobby_id = member["source_id"]
         contracts = totals["contracts"]
-        finance = totals["campaign_finance"]
+        finance_modern = era_totals["modern"]
+        finance_legacy = era_totals["pre2022"]
         lobbying = totals["lobbying"]
         name = members[0]["canonical_name"]
         other_aliases = sorted({m["alias"] for m in members} - {name})
         index.append([
             name, bits,
             round(contracts[1]), contracts[0],
-            round(finance[1]), finance[0],
+            round(finance_modern[1]), finance_modern[0],
             lobbying[0],
             lobby_id,
             other_aliases,
+            round(finance_legacy[1]), finance_legacy[0],
         ])
     index.sort(key=lambda e: (-bin(e[1]).count("1"), -e[2], e[0]))
     return index
@@ -492,8 +531,30 @@ function esc(s) {{
     c => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}})[c]);
 }}
 
+// Phase 1.4: pre-2022 money and 2022+ money are never summed into one
+// figure -- the state's own record of the older era is frozen and the two
+// periods aren't the same claim. Two distinct eras render as two lines;
+// one era (the common case today) renders exactly as before.
+function campaignFinanceFigures(e) {{
+  const eras = e.contrib_eras || {{}};
+  const keys = Object.keys(eras);
+  if (keys.length < 2) {{
+    const t = e.totals.campaign_finance;
+    return '<div class="fig">' + money(t.amount) + '<span>' + LABELS.campaign_finance +
+      ' · ' + t.records.toLocaleString() + ' records · itemized only</span></div>';
+  }}
+  const ERA_LABEL = {{modern: '2022–present', pre2022: 'pre-2022, frozen by the state'}};
+  return keys.sort().map(era => {{
+    const t = eras[era];
+    return '<div class="fig">' + money(t.amount) + '<span>' + LABELS.campaign_finance +
+      ' (' + (ERA_LABEL[era] || era) + ') · ' + t.records.toLocaleString() +
+      ' records · itemized only</span></div>';
+  }}).join('');
+}}
+
 function figures(e) {{
   return ORDER.filter(s => e.totals[s]).map(s => {{
+    if (s === 'campaign_finance') return campaignFinanceFigures(e);
     const t = e.totals[s];
     // Lobbying is counted in registered positions, and carries a dollar figure
     // only where the principal's Form C has been collected. An entity with no
@@ -502,10 +563,7 @@ function figures(e) {{
     const value = s === 'lobbying'
       ? (t.amount ? money(t.amount) : t.records.toLocaleString() + ' positions')
       : money(t.amount);
-    // UI_SPEC: if a total is itemized-only, the UI says so next to the total,
-    // every time -- not once in a footnote.
     let note = '';
-    if (s === 'campaign_finance') note = ' · itemized only';
     if (s === 'lobbying' && t.amount) {{
       note = ' · ' + t.records.toLocaleString() + ' positions · self-reported';
       return '<div class="fig">' + value + '<span>' + LABELS[s] + note +
@@ -550,8 +608,17 @@ function render(rows, pool) {{
       const deepLink = e.lite && e.links && e.links[s];
       const href = deepLink || PROJECTS[s];
       const linkLabel = deepLink ? 'search this name' : 'source project';
-      return '<div class="alias">' + LABELS[s] + ' — <a href="' + esc(href) +
+      let line = '<div class="alias">' + LABELS[s] + ' — <a href="' + esc(href) +
         '" rel="noopener">' + linkLabel + '</a>, ' + when + '</div>';
+      // Phase 1.4: an entity with pre-2022 campaign-finance money also gets
+      // the frozen-data note, once, regardless of whether it also has
+      // modern-era money.
+      if (s === 'campaign_finance' && e.contrib_eras && e.contrib_eras.pre2022
+          && RETRIEVED.campaign_finance_legacy_note) {{
+        line += '<div class="alias">' + esc(RETRIEVED.campaign_finance_legacy_note) +
+          '</div>';
+      }}
+      return line;
     }}).join('');
 
     // UI_SPEC: any match shown carries its score and the reason it matched.
@@ -595,11 +662,20 @@ function widen(row) {{
   if (bits & BITS.campaign_finance) sources.push('campaign_finance');
   if (bits & BITS.lobbying) sources.push('lobbying');
   const totals = {{}};
+  const contribEras = {{}};
   if (bits & BITS.contracts) {{
     totals.contracts = {{records: row[COL.contract_recs], amount: row[COL.contract_amt]}};
   }}
   if (bits & BITS.campaign_finance) {{
-    totals.campaign_finance = {{records: row[COL.contrib_recs], amount: row[COL.contrib_amt]}};
+    // contrib_amt/contrib_recs are modern (2022+) only as of Phase 1.4;
+    // contrib_amt_legacy/contrib_recs_legacy is pre-2022. Combined here into
+    // totals.campaign_finance for callers that just want a bottom line, and
+    // into contrib_eras for figures()' two-line rendering when both exist.
+    const modernRecs = row[COL.contrib_recs], modernAmt = row[COL.contrib_amt];
+    const legacyRecs = row[COL.contrib_recs_legacy] || 0, legacyAmt = row[COL.contrib_amt_legacy] || 0;
+    totals.campaign_finance = {{records: modernRecs + legacyRecs, amount: modernAmt + legacyAmt}};
+    if (modernRecs) contribEras.modern = {{records: modernRecs, amount: modernAmt}};
+    if (legacyRecs) contribEras.pre2022 = {{records: legacyRecs, amount: legacyAmt}};
   }}
   if (bits & BITS.lobbying) {{
     totals.lobbying = {{records: row[COL.lobby_recs]}};
@@ -610,7 +686,8 @@ function widen(row) {{
     name: n, sources, url: '',
   }}));
   return {{
-    name, sources, totals, aliases, match: null, hard_id: false, lite: true,
+    name, sources, totals, contrib_eras: contribEras, aliases, match: null,
+    hard_id: false, lite: true,
     links: Object.fromEntries(sources.map(s => [s, SOURCE_LINK[s](name, lobbyId)])),
   }};
 }}
