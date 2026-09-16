@@ -2,12 +2,15 @@
 
 from sources import (
     NADC_CONTRIBUTIONS_SEARCH_URL,
+    load_campaign_filers,
     load_contributors,
     load_disclosure_filers,
     load_fec_candidates,
     load_fec_committees,
     load_fec_contributors,
+    load_legacy_campaign_filers,
     load_legacy_contributors,
+    load_spend_only_filers,
 )
 
 CONTRIBUTIONS = """source_name,source_type,amount,include_in_total,filer_name,city
@@ -135,3 +138,60 @@ def test_fec_individual_contributor_parsed_when_present(tmp_path):
     contributors = load_fec_contributors(tmp_path)
     assert contributors["DOE, JANE"].entity_type == "individual"
     assert contributors["DOE, JANE"].total_amount == 250.0
+
+
+def test_campaign_filer_is_always_an_organization(tmp_path):
+    (tmp_path / "contributions.csv").write_text(CONTRIBUTIONS)
+    filers = load_campaign_filers(tmp_path)
+    party = filers[("filer:Some Committee", "modern")]
+    assert party.entity_type == "organization"
+    assert party.source == "campaign_finance"
+    assert party.role == "filer"
+    assert party.total_amount == 100.0
+
+
+def test_campaign_filer_key_never_collides_with_a_contributor_key(tmp_path):
+    """load_campaign_filers()'s dict is merged with load_contributors()'s via
+    {**a, **b} in build_entities.py -- without the "filer:" key prefix, a
+    name that happens to be both a contributor and a filer in the same era
+    would silently clobber one Party."""
+    same_name = "Jane Doe,Individual,100.00,True,Jane Doe,Lincoln\n"
+    (tmp_path / "contributions.csv").write_text(
+        "source_name,source_type,amount,include_in_total,filer_name,city\n" + same_name
+    )
+    contributors = load_contributors(tmp_path)
+    filers = load_campaign_filers(tmp_path)
+    merged = {**contributors, **filers}
+    assert len(merged) == 2
+
+
+def test_legacy_campaign_filer_is_tagged_pre2022(tmp_path):
+    (tmp_path / "contributions_legacy.csv").write_text(CONTRIBUTIONS)
+    filers = load_legacy_campaign_filers(tmp_path)
+    assert filers[("filer:Some Committee", "pre2022")].era == "pre2022"
+
+
+def test_spend_only_filer_gets_an_entity_with_zero_receipts(tmp_path):
+    """A filer that spent money but never appears as a filer_name in
+    contributions.csv at all -- every itemized receipt was below the
+    reporting threshold. Without this, the entity (and its spending) would
+    be unreachable."""
+    (tmp_path / "expenditures.csv").write_text(
+        "filer_name,expenditure_date,amount,payee_name,include_in_total\n"
+        "Ghost Committee,2025-01-01,500.00,Print Shop,True\n"
+    )
+    filers = load_spend_only_filers(tmp_path)
+    party = filers[("filer:Ghost Committee", "modern")]
+    assert party.entity_type == "organization"
+    assert party.record_count == 0
+    assert party.total_amount == 0.0
+
+
+def test_spend_only_filer_skipped_when_already_a_known_filer(tmp_path):
+    (tmp_path / "contributions.csv").write_text(CONTRIBUTIONS)
+    (tmp_path / "expenditures.csv").write_text(
+        "filer_name,expenditure_date,amount,payee_name,include_in_total\n"
+        "Some Committee,2025-01-01,500.00,Print Shop,True\n"
+    )
+    filers = load_spend_only_filers(tmp_path)
+    assert filers == {}

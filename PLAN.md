@@ -48,6 +48,36 @@ Nebraska Cattlemen, Inc. (2,435 positions) rendered correctly alongside its
 itemized campaign-finance table in the same expanded row. 39 tests passing
 in `ne-lobbying` (5 new), 115 in `ne-connect` (2 new).
 
+**Campaign-finance filers and spending, done 2026-09-15** (project owner's
+follow-up: "I am also interested in campaign spending"). Committees and
+candidates ("filers") are now first-class hub entities -- previously they
+only appeared as the "To" column inside a contributor's transaction list.
+`ingest/sources.py` gained `load_campaign_filers()`/
+`load_legacy_campaign_filers()` (era-keyed like `load_contributors()`,
+`role="filer"`, always `entity_type="organization"`) and
+`load_spend_only_filers()` (a filer with real spending but zero itemized
+receipts -- everything it raised was sub-threshold -- still needs an
+entity or its spending is unreachable). Every filer dict key carries a
+`"filer:"` prefix so merging with the contributor dict
+(`{**load_contributors(), **load_campaign_filers(), ...}`) can never
+silently clobber a name that happens to be both. `ne-campaign-finance`
+gained the spending-side counterpart to `d/rows.json`:
+`build_expenditures_index()` -> `d/expenditures.json`, keyed by filer name,
+reading `expenditures.csv` + `expenditures_legacy.csv` (never
+`independent_expenditures.csv` -- a documented subset, not extra rows).
+ne-connect fetches it lazily and renders a "Campaign spending" table,
+included in the per-entity CSV export too. Verified live against the real
+data: Jim Pillen for Governor ($24.4M modern + $841,574 pre-2022 raised,
+1,133 itemized expenditures -- payroll, campaign staff, a Zoom
+subscription, bank fees) rendered correctly. Also fixed two real bugs
+found while building this: a `figures()` guard against a spend-only
+filer's truthy-but-zero totals rendering a misleading "$0 · 0 records"
+line, and a CSV/formula-injection hole in `csvCell()` (a state-published
+description or payee name starting with `=`/`+`/`-`/`@`/tab/CR could open
+as a live formula in Excel) caught by an automated security review of the
+CSV-download commit and fixed the same day. 120 tests passing in
+`ne-connect` (5 new), 121 in `ne-campaign-finance` (3 new).
+
 **Verified state driving Phase 0** (paths under repo root):
 - Position sweep died on an uncaught `requests.ReadTimeout` after legislature 109. `ne-lobbying/scripts/lobby.py:161-178` retries only HTTP 429; `:436-441` catches only `KeyboardInterrupt`/`RateLimited`. `sweep_all.sh:19-22` treats a vanished pid as "finished", so 108-3, 108, 107-1, 107, 106, 105 were never started. 39,909 positions for 109 only.
 - `expenses.py:170-182 scrape_aggregate` appends through `write_rows` (`:158-167`) with no guard; `sweep_all.sh:36` reruns it each chain → `expenses_statewide.csv` has 816 rows, 408 expected.

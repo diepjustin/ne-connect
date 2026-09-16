@@ -219,6 +219,52 @@ exposed to the page as `lobby_id` on both the inline entity object --
 `build_entities()` in `build_site.py` -- and the lazily-widened one), so
 ne-connect's JS looks it up directly as `positionsData[e.lobby_id]`.
 
+## Campaign-finance filers and spending
+
+Added 2026-09-15: campaign-finance committees and candidates ("filers")
+are now first-class hub entities, not just the "To" column inside a
+contributor's transaction list. `ingest/sources.py` gained
+`load_campaign_filers()`/`load_legacy_campaign_filers()` (era-keyed exactly
+like `load_contributors()`, `role="filer"`, `entity_type="organization"`
+always) and `load_spend_only_filers()` (a filer with real expenditures but
+zero itemized receipts -- every one of its contributions was below the
+reporting threshold -- still needs an entity, or its spending would be
+unreachable; `record_count`/`total_amount` stay 0 for these).
+
+**Real collision risk, handled:** these three loaders' dicts are merged
+with `load_contributors()`'s via `{**a, **b, ...}` in
+`build/build_entities.py`. A name that happens to be both a contributor and
+a filer in the same era would otherwise silently clobber one `Party` on
+merge. Every filer dict key carries a `"filer:"` prefix
+(`("filer:" + filer_name, era)`) specifically to make that collision
+impossible -- confirmed by
+`tests/test_sources.py::test_campaign_filer_key_never_collides_with_a_contributor_key`.
+
+**`figures()` guard**: a spend-only filer's `{records: 0, amount: 0}` is
+truthy, so without a guard it would render a misleading "$0 · 0 records"
+contributions line. `build_site.py`'s `figures()` now skips a source's
+summary figure entirely when both `records` and `amount` are zero.
+
+**Cross-fetch: `ne-campaign-finance`'s `d/expenditures.json`.** The
+spending-side counterpart to `d/rows.json`: `build_expenditures_index()`
+writes `{filer_name: [[date, amount, payee_name, description, city, state,
+support_or_oppose, included, era], ...]}` from `expenditures.csv` +
+`expenditures_legacy.csv`, era-tagged the same way contributions are.
+Deliberately does NOT read `independent_expenditures.csv` -- PLAN.md's own
+table notes it is "a subset of expenditures, not extra rows," so reading
+both would double-count. ne-connect fetches this lazily (same
+alias-guessing lookup as `d/rows.json`, since a filer's raw name isn't
+distinguished from a contributor's in the entity object) and renders a
+"Campaign spending" table, included in both the itemized detail view and
+the per-entity CSV export (`record_type: campaign_finance_expenditure`).
+
+**CSV/formula-injection guard.** Several exported fields (a description, a
+payee name) are the state's own verbatim text this project never
+rewrites -- if one starts with `=`, `+`, `-`, `@`, a tab, or a carriage
+return, Excel/Sheets can read it as a formula on open. `csvCell()` prefixes
+such values with a bare `'` before the existing quote-escaping, same fix
+applied retroactively to every CSV export this page produces.
+
 ## Dedup contract, by source
 
 See `PLAN.md`'s dedup table — it is the one place this is kept current, since

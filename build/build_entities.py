@@ -35,15 +35,18 @@ from match import match_pair  # noqa: E402
 from normalize import normalize_org  # noqa: E402
 from resolutions import Ledger, UnionFind  # noqa: E402
 from sources import (  # noqa: E402
+    load_campaign_filers,
     load_contract_vendors,
     load_contributors,
     load_disclosure_filers,
     load_fec_candidates,
     load_fec_committees,
     load_fec_contributors,
+    load_legacy_campaign_filers,
     load_legacy_contributors,
     load_lobbying_aliases,
     load_lobbying_principals,
+    load_spend_only_filers,
 )
 
 DATA_DIR = ROOT / "data"
@@ -103,8 +106,15 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
     # Both eras merged before keying: load_contributors() now keys its own
     # dict by (name, era), so a donor who gave in both eras produces two
     # distinct Party objects here rather than one clobbering the other --
-    # see sources.py's load_contributors() docstring.
-    contributors = _keyed({**load_contributors(), **load_legacy_contributors()})
+    # see sources.py's load_contributors() docstring. Filers (candidates/
+    # committees) are merged in too -- load_campaign_filers()'s "filer:"
+    # key prefix is what stops a name that's both a contributor and a filer
+    # from clobbering one Party via this dict merge.
+    contributors = _keyed({
+        **load_contributors(), **load_legacy_contributors(),
+        **load_campaign_filers(), **load_legacy_campaign_filers(),
+        **load_spend_only_filers(),
+    })
     lobbying_principals = load_lobbying_principals()
     lobbying = _keyed_lobbying(lobbying_principals, load_lobbying_aliases())
     # Filers only, never counterparty orgs -- see load_disclosure_filers()'s

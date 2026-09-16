@@ -175,6 +175,106 @@ def load_legacy_contributors(data_dir: Path = None):
     return load_contributors(data_dir, filename="contributions_legacy.csv", era="pre2022")
 
 
+def load_campaign_filers(data_dir: Path = None, *, filename: str = "contributions.csv",
+                          era: str = "modern"):
+    """Campaign-finance filers (candidates/committees), keyed by (raw filer
+    name, era) -- same era-keying reason as load_contributors(): a filer
+    active in both eras must not have one era's Party clobber the other.
+
+    entity_type="organization" always -- a filer is a registered committee,
+    even when it is literally named after the candidate it supports.
+
+    total_amount/record_count here is money RECEIVED (itemized contributions
+    only, include_in_total rows -- matching what ne-campaign-finance's own
+    site shows for a filer). Itemized SPENDING is a separate concept ne-connect
+    fetches lazily from that project's d/expenditures.json, the same lazy
+    pattern already used for contributions and lobbying positions -- see
+    docs/SCHEMA.md's "Cross-fetch" sections. Never summed together: raising
+    and spending are not the same figure.
+    """
+    data_dir = data_dir or CAMPAIGN_FINANCE_DATA
+    path = data_dir / filename
+    filers = {}
+    if not path.exists():
+        return filers
+
+    with path.open(encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh):
+            filer_name = (row.get("filer_name") or "").strip()
+            if not filer_name:
+                continue
+            # "filer:" prefix: a filer dict is merged with a contributor dict
+            # by the caller ({**load_contributors(), **load_campaign_filers()})
+            # -- without this, a name that happens to be both a contributor
+            # and a filer in the same era would silently clobber one Party.
+            key = ("filer:" + filer_name, era)
+            party = filers.get(key)
+            if party is None:
+                party = filers[key] = Party(
+                    name=filer_name,
+                    source="campaign_finance",
+                    role="filer",
+                    era=era,
+                    entity_type="organization",
+                    sample_url=NADC_CONTRIBUTIONS_SEARCH_URL,
+                )
+            if row.get("include_in_total") == "True":
+                party.record_count += 1
+                try:
+                    party.total_amount += float(row["amount"]) if row.get("amount") else 0.0
+                except ValueError:
+                    pass
+    return filers
+
+
+def load_legacy_campaign_filers(data_dir: Path = None):
+    """Pre-2022 campaign filers, same wrapper pattern as load_legacy_contributors()."""
+    return load_campaign_filers(data_dir, filename="contributions_legacy.csv", era="pre2022")
+
+
+def load_spend_only_filers(data_dir: Path = None):
+    """Filers that spent money but never appear as a filer_name in
+    contributions.csv/contributions_legacy.csv at all -- every one of their
+    itemized receipts was below the reporting threshold. Real but rare; skip
+    it and that filer's spending is unreachable because the filer itself was
+    never a searchable entity. era="modern" always here since expenditures.csv
+    doesn't record which era a spend-only filer belongs to any more precisely
+    than that; record_count/total_amount stay 0 -- this Party exists only so
+    the entity is searchable, not to claim a receipts total.
+    """
+    data_dir = data_dir or CAMPAIGN_FINANCE_DATA
+    known = set()
+    for filename in ("contributions.csv", "contributions_legacy.csv"):
+        path = data_dir / filename
+        if not path.exists():
+            continue
+        with path.open(encoding="utf-8", newline="") as fh:
+            known.update(
+                (row.get("filer_name") or "").strip() for row in csv.DictReader(fh)
+            )
+
+    filers = {}
+    for filename in ("expenditures.csv", "expenditures_legacy.csv"):
+        path = data_dir / filename
+        if not path.exists():
+            continue
+        with path.open(encoding="utf-8", newline="") as fh:
+            for row in csv.DictReader(fh):
+                filer_name = (row.get("filer_name") or "").strip()
+                if filer_name and filer_name not in known:
+                    key = ("filer:" + filer_name, "modern")
+                    if key not in filers:
+                        filers[key] = Party(
+                            name=filer_name,
+                            source="campaign_finance",
+                            role="filer",
+                            era="modern",
+                            entity_type="organization",
+                            sample_url=NADC_CONTRIBUTIONS_SEARCH_URL,
+                        )
+    return filers
+
+
 def structured_contributor_names(data_dir: Path = None):
     """Raw source_name -> (last, first) for individuals, for person keys."""
     data_dir = data_dir or CAMPAIGN_FINANCE_DATA

@@ -699,7 +699,13 @@ function campaignFinanceFigures(e) {{
 }}
 
 function figures(e) {{
-  return ORDER.filter(s => e.totals[s]).map(s => {{
+  // A spend-only campaign-finance filer (load_spend_only_filers()) has 0
+  // itemized receipts by construction -- a zero-valued totals object is
+  // still truthy, so without this a filer with real spending but no
+  // itemized receipts
+  // would show a misleading "$0 · 0 records" instead of nothing at all
+  // (its spending shows in the itemized table below regardless).
+  return ORDER.filter(s => e.totals[s] && (e.totals[s].records || e.totals[s].amount)).map(s => {{
     if (s === 'campaign_finance') return campaignFinanceFigures(e);
     const t = e.totals[s];
     // Disclosures have no dollar concept at all -- a C-1 reports interests
@@ -809,6 +815,11 @@ function render(rows, pool) {{
     // (11+ MB) for every entity up front would defeat the point of a lazy index.
     const txnsSlot = e.sources.includes('campaign_finance')
       ? '<div class="txns-slot cf-slot"></div>' : '';
+    // Same alias-guessing as cf-slot: a filer's raw name isn't distinguished
+    // from a contributor's in this entity object, so this is tried for any
+    // campaign_finance entity -- a miss in expenditures.json costs nothing.
+    const spendSlot = e.sources.includes('campaign_finance')
+      ? '<div class="txns-slot spend-slot"></div>' : '';
     const posSlot = e.sources.includes('lobbying') && e.lobby_id
       ? '<div class="txns-slot pos-slot"></div>' : '';
 
@@ -822,7 +833,7 @@ function render(rows, pool) {{
       '<h4>Why these records are grouped</h4>' + conf +
       '<h4>Name variants folded into this entity</h4>' + aliases +
       '<h4>Where each figure comes from</h4>' + prov +
-      txnsSlot + posSlot +
+      txnsSlot + spendSlot + posSlot +
       // PRIVACY: per-entity export only, per docs/PRIVACY.md rule 4 ("Per-search
       // CSV export is fine. A 'download all 240,000 contributors' button is
       // not.") -- never add a site-wide or filtered-list export button.
@@ -968,6 +979,45 @@ function renderTxnTable(txns) {{
     rowsHtml + '</table>' + more;
 }}
 
+// Same lazy, cache-once pattern as loadCampaignFinanceRows -- the spending
+// side of the same site's data, a separate file since it's keyed by filer
+// name, not contributor name.
+let CF_EXPENDITURES = null;
+function loadCampaignExpenditures() {{
+  if (CF_EXPENDITURES) return Promise.resolve(CF_EXPENDITURES);
+  return fetch('../ne-campaign-finance/d/expenditures.json').then(r => r.json())
+    .then(j => {{ CF_EXPENDITURES = j; return j; }});
+}}
+
+function campaignExpenditures(e, expendData) {{
+  const keys = new Set([e.name, ...e.aliases.map(a => a.name)]);
+  const txns = [];
+  keys.forEach(k => {{ (expendData[k] || []).forEach(t => txns.push(t)); }});
+  txns.sort((a, b) => (b[0] || '').localeCompare(a[0] || ''));
+  return txns;
+}}
+
+function renderExpendituresTable(txns) {{
+  if (!txns.length) return '';
+  const rowsHtml = txns.slice(0, 200).map(t => {{
+    const [dateStr, amount, payeeName, desc, city, state, supportOppose, included, era] = t;
+    const place = [city, state].filter(Boolean).join(', ');
+    const legacyNote = era === 'pre2022' ? ' <span class="era-tag">pre-2022</span>' : '';
+    const dim = included ? '' : ' style="opacity:.55" title="not counted toward the total -- see include_in_total"';
+    const stance = supportOppose
+      ? ' <span class="' + (POSITION_CLASS[supportOppose] || '') + '">' + esc(supportOppose) + '</span>'
+      : '';
+    return '<tr' + dim + '><td>' + esc(dateStr) + legacyNote + '</td><td class="n">' +
+      cfMoney(amount) + '</td><td>' + esc(payeeName) + stance + '</td><td>' + esc(place) + '</td>' +
+      '<td>' + esc(desc) + '</td></tr>';
+  }}).join('');
+  const more = txns.length > 200
+    ? '<p class="hint">' + (txns.length - 200).toLocaleString() + ' more not shown.</p>' : '';
+  return '<h4>Campaign spending</h4>' +
+    '<table><tr><th>Date</th><th>Amount</th><th>Paid to</th><th>City, State</th><th>Description</th></tr>' +
+    rowsHtml + '</table>' + more;
+}}
+
 // Same pattern as loadCampaignFinanceRows: ne-lobbying's own already-published
 // d/positions.json, fetched once and cached, never duplicated into this build.
 let LOBBY_POSITIONS = null;
@@ -1010,11 +1060,17 @@ const CSV_HEADER = [
 ];
 
 function csvCell(v) {{
-  const s = v === null || v === undefined ? '' : String(v);
+  let s = v === null || v === undefined ? '' : String(v);
+  // CSV/formula injection: several fields here are the state's own verbatim
+  // text (a description, a payee name) that this project never rewrites --
+  // if one happens to start with =, +, -, @, a tab or a CR, Excel/Sheets can
+  // read it as a formula on open. Prefix with a bare quote so it opens as
+  // text; the visible value is unchanged.
+  if (/^[=+\\-@\\t\\r]/.test(s)) s = "'" + s;
   return /["\\n,]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }}
 
-function entityToCSVRows(e, cfTxns, positions) {{
+function entityToCSVRows(e, cfTxns, spending, positions) {{
   const rows = [CSV_HEADER];
   const push = obj => rows.push(CSV_HEADER.map(col => obj[col] ?? ''));
 
@@ -1054,6 +1110,17 @@ function entityToCSVRows(e, cfTxns, positions) {{
       source: 'campaign_finance', date: dateStr, amount, recipient: filerName,
       city_state: [city, state].filter(Boolean).join(', '), description: desc,
       era, note: included ? '' : 'excluded from the total (see include_in_total)',
+    }});
+  }});
+
+  (spending || []).forEach(t => {{
+    const [dateStr, amount, payeeName, desc, city, state, supportOppose, included, era] = t;
+    push({{
+      entity: e.name, record_type: 'campaign_finance_expenditure',
+      source: 'campaign_finance', date: dateStr, amount, recipient: payeeName,
+      city_state: [city, state].filter(Boolean).join(', '), description: desc,
+      era, position: supportOppose,
+      note: included ? '' : 'excluded from the total (see include_in_total)',
     }});
   }});
 
@@ -1097,13 +1164,15 @@ list.addEventListener('click', ev => {{
     dlBtn.textContent = 'Preparing…';
     Promise.all([
       wantsCf ? loadCampaignFinanceRows() : Promise.resolve(null),
+      wantsCf ? loadCampaignExpenditures() : Promise.resolve(null),
       wantsPos ? loadLobbyingPositions() : Promise.resolve(null),
-    ]).then(([rowsData, positionsData]) => {{
+    ]).then(([rowsData, expendData, positionsData]) => {{
       const cfTxns = rowsData ? campaignFinanceTxns(e, rowsData) : [];
+      const spending = expendData ? campaignExpenditures(e, expendData) : [];
       const positions = positionsData ? (positionsData[e.lobby_id] || []) : [];
-      downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, cfTxns, positions));
+      downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, cfTxns, spending, positions));
     }}).catch(() => {{
-      downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, [], []));
+      downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, [], [], []));
     }}).finally(() => {{
       dlBtn.disabled = false;
       dlBtn.textContent = 'Download this entity as CSV';
@@ -1126,6 +1195,15 @@ list.addEventListener('click', ev => {{
     loadCampaignFinanceRows().then(rowsData => {{
       cfSlot.innerHTML = renderTxnTable(campaignFinanceTxns(e, rowsData));
     }}).catch(() => {{ cfSlot.textContent = 'Could not load itemized records.'; }});
+  }}
+
+  const spendSlot = row.querySelector('.spend-slot');
+  if (spendSlot && !row.dataset.spendLoaded) {{
+    row.dataset.spendLoaded = '1';
+    spendSlot.textContent = 'Loading campaign spending…';
+    loadCampaignExpenditures().then(expendData => {{
+      spendSlot.innerHTML = renderExpendituresTable(campaignExpenditures(e, expendData));
+    }}).catch(() => {{ spendSlot.textContent = 'Could not load campaign spending.'; }});
   }}
 
   const posSlot = row.querySelector('.pos-slot');
