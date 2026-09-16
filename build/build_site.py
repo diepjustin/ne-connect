@@ -452,7 +452,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
   }}
   a {{ color: var(--accent); }}
   a:hover {{ color: var(--text); }}
-  header {{ padding: 40px 20px 0; max-width: 900px; margin: 0 auto; }}
+  header {{ padding: 40px 20px 0; max-width: 1180px; margin: 0 auto; }}
   .kicker {{
     font: 600 11.5px/1 inherit; letter-spacing: .12em; text-transform: uppercase;
     color: var(--accent); margin: 0 0 14px;
@@ -487,7 +487,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
     text-transform: uppercase; color: var(--muted);
   }}
   .controls {{
-    max-width: 900px; margin: 0 auto; padding: 0 20px;
+    max-width: 1180px; margin: 0 auto; padding: 0 20px;
     display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin-bottom: 8px;
   }}
   .search {{ position: relative; flex: 1 1 320px; }}
@@ -509,12 +509,16 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
   .pill-lobbying.active {{ background: var(--lobbying); border-color: var(--lobbying); color: #fff; }}
   .pill-disclosures.active {{ background: var(--disclosures); border-color: var(--disclosures); color: #fff; }}
   .pill-fec.active {{ background: var(--fec); border-color: var(--fec); color: #fff; }}
-  #count {{ color: var(--muted); font-size: 12.5px; max-width: 900px; margin: 10px auto 4px; padding: 0 20px; }}
-  main {{ max-width: 900px; margin: 0 auto; padding: 0 20px 60px; }}
-  .entity {{ border-bottom: 1px solid var(--border); padding: 16px 4px; }}
-  .etop {{ display: flex; align-items: baseline; gap: 12px; cursor: pointer; }}
-  .chevron {{ flex: none; transition: transform .15s ease; opacity: .55; margin-top: 2px; }}
-  .entity.open .chevron {{ transform: rotate(90deg); }}
+  #count {{ color: var(--muted); font-size: 12.5px; max-width: 1180px; margin: 10px auto 4px; padding: 0 20px; }}
+  .layout {{
+    max-width: 1180px; margin: 0 auto; padding: 0 20px 60px;
+    display: flex; gap: 24px; align-items: flex-start;
+  }}
+  #list {{ flex: 1 1 480px; min-width: 0; }}
+  .entity {{ border-bottom: 1px solid var(--border); padding: 16px 4px; cursor: pointer; }}
+  .entity:hover {{ background: var(--panel); }}
+  .entity.selected {{ background: var(--panel); box-shadow: inset 3px 0 0 var(--accent); }}
+  .etop {{ display: flex; align-items: baseline; gap: 12px; }}
   .ename {{ font: 600 17px/1.3 var(--serif); flex: 1 1 240px; }}
   .badges {{ display: flex; gap: 10px; flex-wrap: wrap; }}
   .src-badge {{ display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); white-space: nowrap; }}
@@ -527,8 +531,20 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
     font-variant-numeric: tabular-nums; font-size: 13.5px;
   }}
   .fig span {{ color: var(--muted); font-size: 11.5px; display: block; }}
-  .detail {{ display: none; margin: 12px 0 0 26px; padding: 0 0 2px; font-size: 13.5px; max-width: 62ch; }}
-  .entity.open .detail {{ display: block; }}
+  /* Dossier panel, 2026-09-15 -- selecting an entity opens its full record
+     here instead of expanding inline: a long inline expand-and-scroll was
+     real reporter feedback ("annoying to scroll thru"). Sticky beside the
+     list on desktop; a slide-up sheet on narrow screens (media query below). */
+  .dossier {{
+    flex: 1 1 380px; max-width: 420px; position: sticky; top: 20px;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--panel);
+    max-height: calc(100vh - 40px); overflow-y: auto; padding: 20px 22px 26px;
+  }}
+  .dossier-empty {{ color: var(--muted); font-size: 13.5px; text-align: center; padding: 50px 10px; }}
+  .dossier-name {{ font: 600 21px/1.25 var(--serif); margin: 2px 0 8px; }}
+  .dossier .figs {{ margin-left: 0; margin-bottom: 4px; }}
+  .dossier-close {{ display: none; }}
+  .detail {{ margin: 14px 0 0; padding: 0 0 2px; font-size: 13.5px; }}
   .detail h4 {{
     margin: 14px 0 5px; font-size: 11px; text-transform: uppercase;
     letter-spacing: .05em; color: var(--muted); font-weight: 600;
@@ -563,7 +579,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
   }}
   .txn-filter:focus {{ outline: 2px solid var(--accent); outline-offset: -1px; }}
   .txn-scroll {{
-    max-height: 320px; overflow-y: auto; border: 1px solid var(--border);
+    max-height: 320px; overflow-y: auto; overflow-x: auto; border: 1px solid var(--border);
     border-radius: 4px;
   }}
   .txn-scroll table {{ margin-top: 0; }}
@@ -571,8 +587,30 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
   .txn-scroll tr[hidden] {{ display: none; }}
   .txn-count {{ color: var(--muted); font-size: 11.5px; margin: 4px 0 0; }}
   .hint {{ color: var(--muted); font-size: 13px; padding: 14px 4px; }}
+  .dossier-scrim {{
+    position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 49;
+    opacity: 0; pointer-events: none; transition: opacity .2s ease;
+  }}
+  body.dossier-open .dossier-scrim {{ opacity: 1; pointer-events: auto; }}
+  @media (min-width: 861px) {{ .dossier-scrim {{ display: none; }} }}
+  @media (max-width: 860px) {{
+    .layout {{ display: block; }}
+    body.dossier-open {{ overflow: hidden; }}
+    .dossier {{
+      position: fixed; top: 8%; left: 0; right: 0; bottom: 0; z-index: 50;
+      max-width: none; border-radius: 14px 14px 0 0; max-height: none;
+      box-shadow: 0 -10px 30px rgba(0,0,0,.3);
+      transform: translateY(100%); transition: transform .25s ease;
+    }}
+    .dossier.show {{ transform: translateY(0); }}
+    .dossier-close {{
+      display: block; position: absolute; top: 10px; right: 12px;
+      font: 22px/1 inherit; background: none; border: none; color: var(--muted);
+      cursor: pointer; padding: 4px 8px;
+    }}
+  }}
   footer {{
-    max-width: 900px; margin: 0 auto; padding: 20px; border-top: 1px solid var(--border);
+    max-width: 1180px; margin: 0 auto; padding: 20px; border-top: 1px solid var(--border);
     color: var(--muted); font-size: 13px;
   }}
   footer p {{ max-width: 68ch; margin: 0 0 8px; }}
@@ -630,7 +668,11 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
 </div>
 <p id="count"></p>
 
-<main id="list"></main>
+<div class="layout">
+  <main id="list"></main>
+  <aside class="dossier" id="dossier"></aside>
+</div>
+<div class="dossier-scrim" id="scrim"></div>
 
 <footer>
   <p><strong>Read before quoting.</strong> Contract figures are award values
@@ -698,10 +740,13 @@ const money = n => n >= 1000000000
     : '$' + Math.round(n).toLocaleString();
 
 const list = document.getElementById('list');
+const dossier = document.getElementById('dossier');
+const scrim = document.getElementById('scrim');
 const q = document.getElementById('q');
 const pills = document.getElementById('pills');
 const count = document.getElementById('count');
 let currentFilter = '';
+let selectedIdx = null;
 
 function esc(s) {{
   return String(s).replace(/[&<>"]/g,
@@ -781,6 +826,10 @@ function render(rows, pool) {{
     ? 'first 400 matches in ' + scope
     : rows.length.toLocaleString() + ' of ' + scope;
   renderedRows = rows;
+  // A re-filtered list invalidates whatever was selected (its index may now
+  // point at a different entity, or the old one may not be in `rows` at
+  // all) -- always fall back to the empty dossier state on re-render.
+  resetDossier();
   if (!rows.length) {{
     list.innerHTML = '<p class="hint">No entity matches that search.</p>';
     return;
@@ -791,93 +840,171 @@ function render(rows, pool) {{
     const badges = ORDER.filter(s => e.sources.includes(s)).map(s =>
       '<span class="src-badge"><span class="dot b-' + s + '"></span>' + LABELS[s] + '</span>').join('') +
       (e.hard_id ? '<span class="id-tag">ID</span>' : '');
-    const aliases = e.aliases.map(a => {{
-      const label = '<b>' + esc(a.name) + '</b>';
-      // Link straight to the state's own record where the source publishes one.
-      const name = a.url
-        ? '<a href="' + esc(a.url) + '" rel="noopener">' + label + '</a>'
-        : label;
-      return '<div class="alias">' + name + ' — ' +
-        a.sources.map(s => LABELS[s]).join(', ') + '</div>';
-    }}).join('');
-
-    const prov = e.sources.map(s => {{
-      const when = RETRIEVED[s] ? 'retrieved ' + RETRIEVED[s] : 'retrieval date unknown';
-      // A lazily-loaded row carries a link straight to this name's own search
-      // or record; an inline cross-source entity only has the source's home.
-      const deepLink = e.lite && e.links && e.links[s];
-      const href = deepLink || PROJECTS[s];
-      const linkLabel = deepLink ? 'search this name' : 'source project';
-      let line = '<div class="alias">' + LABELS[s] + ' — <a href="' + esc(href) +
-        '" rel="noopener">' + linkLabel + '</a>, ' + when + '</div>';
-      // Phase 1.4: an entity with pre-2022 campaign-finance money also gets
-      // the frozen-data note, once, regardless of whether it also has
-      // modern-era money.
-      if (s === 'campaign_finance' && e.contrib_eras && e.contrib_eras.pre2022
-          && RETRIEVED.campaign_finance_legacy_note) {{
-        line += '<div class="alias">' + esc(RETRIEVED.campaign_finance_legacy_note) +
-          '</div>';
-      }}
-      if (s === 'fec' && RETRIEVED.fec_note) {{
-        line += '<div class="alias">' + esc(RETRIEVED.fec_note) + '</div>';
-      }}
-      return line;
-    }}).join('');
-
-    // UI_SPEC: any match shown carries its score and the reason it matched.
-    let conf;
-    if (e.hard_id) {{
-      conf = '<div class="alias">Joined by an identifier the source itself ' +
-        'publishes — identity by construction, not name similarity.</div>';
-    }} else if (e.match) {{
-      conf = '<div class="alias">Score ' + e.match.score.toFixed(2) + ' — ' +
-        esc(e.match.reason) + '</div>' +
-        '<div class="alias">Machine-decided and unreviewed. No person has ' +
-        'confirmed this grouping.</div>';
-    }} else if (e.lite) {{
-      conf = '<div class="alias">Single source; linking to that source\\'s ' +
-        'search for this name.</div>';
-    }} else {{
-      conf = '<div class="alias">Single source; nothing was matched to it.</div>';
-    }}
-
-    // Itemized records fetch lazily the first time this row opens -- fetching
-    // ../ne-campaign-finance/d/rows.json (35+ MB) or ../ne-lobbying/d/positions.json
-    // (11+ MB) for every entity up front would defeat the point of a lazy index.
-    const txnsSlot = e.sources.includes('campaign_finance')
-      ? '<div class="txns-slot cf-slot"></div>' : '';
-    // Same alias-guessing as cf-slot: a filer's raw name isn't distinguished
-    // from a contributor's in this entity object, so this is tried for any
-    // campaign_finance entity -- a miss in expenditures.json costs nothing.
-    const spendSlot = e.sources.includes('campaign_finance')
-      ? '<div class="txns-slot spend-slot"></div>' : '';
-    const posSlot = e.sources.includes('lobbying') && e.lobby_id
-      ? '<div class="txns-slot pos-slot"></div>' : '';
-    const discSlot = e.sources.includes('disclosures') && e.disclosure_ids && e.disclosure_ids.length
-      ? '<div class="txns-slot disc-slot"></div>' : '';
-    const contractsSlot = e.sources.includes('contracts')
-      ? '<div class="txns-slot contracts-slot"></div>' : '';
-
     return '<div class="entity" data-idx="' + idx + '">' +
       '<div class="etop">' +
-      '<svg class="chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 15 12 9 18"/></svg>' +
       '<div class="ename">' + esc(e.name) + '</div>' +
       '<div class="badges">' + badges + '</div></div>' +
       '<div class="figs">' + figures(e) + '</div>' +
-      '<div class="detail">' +
-      '<h4>Why these records are grouped</h4>' + conf +
-      '<h4>Name variants folded into this entity</h4>' + aliases +
-      '<h4>Where each figure comes from</h4>' + prov +
-      // Above the itemized tables on purpose -- those can run to hundreds of
-      // scrollable rows, and the button got lost below them (real feedback:
-      // a reporter scrolled past a long table and never found it).
-      // PRIVACY: per-entity export only, per docs/PRIVACY.md rule 4 ("Per-search
-      // CSV export is fine. A 'download all 240,000 contributors' button is
-      // not.") -- never add a site-wide or filtered-list export button.
-      '<button class="dl-btn" type="button">Download this entity as CSV</button>' +
-      txnsSlot + spendSlot + posSlot + discSlot + contractsSlot +
-      '</div></div>';
+      '</div>';
   }}).join('');
+}}
+
+// Dossier panel, 2026-09-15 -- selecting an entity opens its full record here
+// (name variants, provenance, itemized tables, CSV export) instead of
+// expanding inline under the row. Real reporter feedback on the old inline
+// pattern: a long expand-in-place was "annoying to scroll thru." Sticky
+// beside the list on desktop; a slide-up sheet on narrow screens (CSS above).
+function dossierEmptyHtml() {{
+  return '<div class="dossier-empty">Select an entity to see its full record.</div>';
+}}
+
+function resetDossier() {{
+  selectedIdx = null;
+  dossier.classList.remove('show');
+  document.body.classList.remove('dossier-open');
+  dossier.innerHTML = dossierEmptyHtml();
+}}
+
+function openDossier(idx) {{
+  const e = renderedRows[idx];
+  if (!e) return;
+  selectedIdx = idx;
+  [...list.children].forEach(row =>
+    row.classList.toggle('selected', Number(row.dataset.idx) === idx));
+
+  // UI_SPEC: confidence is always visible -- the ID/SCORED badge travels
+  // into the dossier header too, not just the list row (which can scroll
+  // out of view while the dossier stays put).
+  const badges = ORDER.filter(s => e.sources.includes(s)).map(s =>
+    '<span class="src-badge"><span class="dot b-' + s + '"></span>' + LABELS[s] + '</span>').join('') +
+    (e.hard_id ? '<span class="id-tag">ID</span>' : '');
+
+  const aliases = e.aliases.map(a => {{
+    const label = '<b>' + esc(a.name) + '</b>';
+    // Link straight to the state's own record where the source publishes one.
+    const name = a.url
+      ? '<a href="' + esc(a.url) + '" rel="noopener">' + label + '</a>'
+      : label;
+    return '<div class="alias">' + name + ' — ' +
+      a.sources.map(s => LABELS[s]).join(', ') + '</div>';
+  }}).join('');
+
+  const prov = e.sources.map(s => {{
+    const when = RETRIEVED[s] ? 'retrieved ' + RETRIEVED[s] : 'retrieval date unknown';
+    // A lazily-loaded row carries a link straight to this name's own search
+    // or record; an inline cross-source entity only has the source's home.
+    const deepLink = e.lite && e.links && e.links[s];
+    const href = deepLink || PROJECTS[s];
+    const linkLabel = deepLink ? 'search this name' : 'source project';
+    let line = '<div class="alias">' + LABELS[s] + ' — <a href="' + esc(href) +
+      '" rel="noopener">' + linkLabel + '</a>, ' + when + '</div>';
+    // Phase 1.4: an entity with pre-2022 campaign-finance money also gets
+    // the frozen-data note, once, regardless of whether it also has
+    // modern-era money.
+    if (s === 'campaign_finance' && e.contrib_eras && e.contrib_eras.pre2022
+        && RETRIEVED.campaign_finance_legacy_note) {{
+      line += '<div class="alias">' + esc(RETRIEVED.campaign_finance_legacy_note) +
+        '</div>';
+    }}
+    if (s === 'fec' && RETRIEVED.fec_note) {{
+      line += '<div class="alias">' + esc(RETRIEVED.fec_note) + '</div>';
+    }}
+    return line;
+  }}).join('');
+
+  // UI_SPEC: any match shown carries its score and the reason it matched.
+  let conf;
+  if (e.hard_id) {{
+    conf = '<div class="alias">Joined by an identifier the source itself ' +
+      'publishes — identity by construction, not name similarity.</div>';
+  }} else if (e.match) {{
+    conf = '<div class="alias">Score ' + e.match.score.toFixed(2) + ' — ' +
+      esc(e.match.reason) + '</div>' +
+      '<div class="alias">Machine-decided and unreviewed. No person has ' +
+      'confirmed this grouping.</div>';
+  }} else if (e.lite) {{
+    conf = '<div class="alias">Single source; linking to that source\\'s ' +
+      'search for this name.</div>';
+  }} else {{
+    conf = '<div class="alias">Single source; nothing was matched to it.</div>';
+  }}
+
+  // Itemized records fetch lazily the first time this entity's dossier opens
+  // -- fetching ../ne-campaign-finance/d/rows.json (35+ MB) or
+  // ../ne-lobbying/d/positions.json (11+ MB) for every entity up front would
+  // defeat the point of a lazy index.
+  const txnsSlot = e.sources.includes('campaign_finance')
+    ? '<div class="txns-slot cf-slot"></div>' : '';
+  // Same alias-guessing as cf-slot: a filer's raw name isn't distinguished
+  // from a contributor's in this entity object, so this is tried for any
+  // campaign_finance entity -- a miss in expenditures.json costs nothing.
+  const spendSlot = e.sources.includes('campaign_finance')
+    ? '<div class="txns-slot spend-slot"></div>' : '';
+  const posSlot = e.sources.includes('lobbying') && e.lobby_id
+    ? '<div class="txns-slot pos-slot"></div>' : '';
+  const discSlot = e.sources.includes('disclosures') && e.disclosure_ids && e.disclosure_ids.length
+    ? '<div class="txns-slot disc-slot"></div>' : '';
+  const contractsSlot = e.sources.includes('contracts')
+    ? '<div class="txns-slot contracts-slot"></div>' : '';
+
+  dossier.innerHTML =
+    '<button class="dossier-close" type="button" aria-label="Close">&times;</button>' +
+    '<div class="dossier-name">' + esc(e.name) + '</div>' +
+    '<div class="badges">' + badges + '</div>' +
+    '<div class="figs">' + figures(e) + '</div>' +
+    '<div class="detail">' +
+    '<h4>Why these records are grouped</h4>' + conf +
+    '<h4>Name variants folded into this entity</h4>' + aliases +
+    '<h4>Where each figure comes from</h4>' + prov +
+    // Above the itemized tables on purpose -- those can run to hundreds of
+    // scrollable rows, and the button got lost below them (real feedback:
+    // a reporter scrolled past a long table and never found it).
+    // PRIVACY: per-entity export only, per docs/PRIVACY.md rule 4 ("Per-search
+    // CSV export is fine. A 'download all 240,000 contributors' button is
+    // not.") -- never add a site-wide or filtered-list export button.
+    '<button class="dl-btn" type="button">Download this entity as CSV</button>' +
+    txnsSlot + spendSlot + posSlot + discSlot + contractsSlot +
+    '</div>';
+  dossier.classList.add('show');
+  document.body.classList.add('dossier-open');
+
+  if (e.sources.includes('campaign_finance')) {{
+    const cfSlot = dossier.querySelector('.cf-slot');
+    cfSlot.textContent = 'Loading itemized records…';
+    loadCampaignFinanceRows().then(rowsData => {{
+      cfSlot.innerHTML = renderTxnTable(campaignFinanceTxns(e, rowsData));
+    }}).catch(() => {{ cfSlot.textContent = 'Could not load itemized records.'; }});
+
+    const spendSlotEl = dossier.querySelector('.spend-slot');
+    spendSlotEl.textContent = 'Loading campaign spending…';
+    loadCampaignExpenditures().then(expendData => {{
+      spendSlotEl.innerHTML = renderExpendituresTable(campaignExpenditures(e, expendData));
+    }}).catch(() => {{ spendSlotEl.textContent = 'Could not load campaign spending.'; }});
+  }}
+
+  if (e.sources.includes('lobbying') && e.lobby_id) {{
+    const posSlotEl = dossier.querySelector('.pos-slot');
+    posSlotEl.textContent = 'Loading registered positions…';
+    loadLobbyingPositions().then(positionsData => {{
+      posSlotEl.innerHTML = renderPositionsTable(positionsData[e.lobby_id] || []);
+    }}).catch(() => {{ posSlotEl.textContent = 'Could not load registered positions.'; }});
+  }}
+
+  if (e.sources.includes('disclosures') && e.disclosure_ids && e.disclosure_ids.length) {{
+    const discSlotEl = dossier.querySelector('.disc-slot');
+    discSlotEl.textContent = 'Loading disclosed items…';
+    loadDisclosureItems().then(itemsData => {{
+      discSlotEl.innerHTML = renderDisclosureItems(disclosureItems(e, itemsData));
+    }}).catch(() => {{ discSlotEl.textContent = 'Could not load disclosed items.'; }});
+  }}
+
+  if (e.sources.includes('contracts')) {{
+    const contractsSlotEl = dossier.querySelector('.contracts-slot');
+    contractsSlotEl.textContent = 'Loading contracts and purchase orders…';
+    loadContractRows(e).then(txns => {{
+      contractsSlotEl.innerHTML = renderContractRows(txns);
+    }}).catch(() => {{ contractsSlotEl.textContent = 'Could not load contracts.'; }});
+  }}
 }}
 
 // The lazily-fetched index is {{columns, rows}}; widen each row, by column
@@ -1330,102 +1457,53 @@ function downloadCSV(filename, rows) {{
   URL.revokeObjectURL(url);
 }}
 
+// Selecting a row opens its dossier -- the itemized-loading and download
+// logic all live on the dossier's own listeners below, since that's where
+// those elements are now rendered.
 list.addEventListener('click', ev => {{
-  // A click inside an itemized table (the filter box, a scroll drag that
-  // ends as a click, an org-detail link) must not also collapse the entity
-  // it lives in -- without this, focusing the filter box closed the whole
-  // section out from under you.
-  if (ev.target.closest('.txns-slot')) return;
-
-  const dlBtn = ev.target.closest('.dl-btn');
-  if (dlBtn) {{
-    const row = dlBtn.closest('.entity');
-    const e = row && renderedRows[Number(row.dataset.idx)];
-    if (!e) return;
-    const wantsCf = e.sources.includes('campaign_finance');
-    const wantsPos = e.sources.includes('lobbying') && e.lobby_id;
-    const wantsDisc = e.sources.includes('disclosures') && e.disclosure_ids && e.disclosure_ids.length;
-    const wantsContracts = e.sources.includes('contracts');
-    dlBtn.disabled = true;
-    dlBtn.textContent = 'Preparing…';
-    Promise.all([
-      wantsCf ? loadCampaignFinanceRows() : Promise.resolve(null),
-      wantsCf ? loadCampaignExpenditures() : Promise.resolve(null),
-      wantsPos ? loadLobbyingPositions() : Promise.resolve(null),
-      wantsDisc ? loadDisclosureItems() : Promise.resolve(null),
-      wantsContracts ? loadContractRows(e) : Promise.resolve(null),
-    ]).then(([rowsData, expendData, positionsData, itemsData, contractTxns]) => {{
-      const cfTxns = rowsData ? campaignFinanceTxns(e, rowsData) : [];
-      const spending = expendData ? campaignExpenditures(e, expendData) : [];
-      const positions = positionsData ? (positionsData[e.lobby_id] || []) : [];
-      const items = itemsData ? disclosureItems(e, itemsData) : [];
-      downloadCSV(slugify(e.name) + '.csv',
-        entityToCSVRows(e, cfTxns, spending, positions, items, contractTxns || []));
-    }}).catch(() => {{
-      downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, [], [], [], [], []));
-    }}).finally(() => {{
-      dlBtn.disabled = false;
-      dlBtn.textContent = 'Download this entity as CSV';
-    }});
-    return;
-  }}
-
   const row = ev.target.closest('.entity');
   if (!row) return;
-  const opening = !row.classList.contains('open');
-  row.classList.toggle('open');
-  if (!opening) return;
-  const e = renderedRows[Number(row.dataset.idx)];
-  if (!e) return;
-
-  const cfSlot = row.querySelector('.cf-slot');
-  if (cfSlot && !row.dataset.cfLoaded) {{
-    row.dataset.cfLoaded = '1';
-    cfSlot.textContent = 'Loading itemized records…';
-    loadCampaignFinanceRows().then(rowsData => {{
-      cfSlot.innerHTML = renderTxnTable(campaignFinanceTxns(e, rowsData));
-    }}).catch(() => {{ cfSlot.textContent = 'Could not load itemized records.'; }});
-  }}
-
-  const spendSlot = row.querySelector('.spend-slot');
-  if (spendSlot && !row.dataset.spendLoaded) {{
-    row.dataset.spendLoaded = '1';
-    spendSlot.textContent = 'Loading campaign spending…';
-    loadCampaignExpenditures().then(expendData => {{
-      spendSlot.innerHTML = renderExpendituresTable(campaignExpenditures(e, expendData));
-    }}).catch(() => {{ spendSlot.textContent = 'Could not load campaign spending.'; }});
-  }}
-
-  const posSlot = row.querySelector('.pos-slot');
-  if (posSlot && !row.dataset.posLoaded) {{
-    row.dataset.posLoaded = '1';
-    posSlot.textContent = 'Loading registered positions…';
-    loadLobbyingPositions().then(positionsData => {{
-      posSlot.innerHTML = renderPositionsTable(positionsData[e.lobby_id] || []);
-    }}).catch(() => {{ posSlot.textContent = 'Could not load registered positions.'; }});
-  }}
-
-  const discSlot = row.querySelector('.disc-slot');
-  if (discSlot && !row.dataset.discLoaded) {{
-    row.dataset.discLoaded = '1';
-    discSlot.textContent = 'Loading disclosed items…';
-    loadDisclosureItems().then(itemsData => {{
-      discSlot.innerHTML = renderDisclosureItems(disclosureItems(e, itemsData));
-    }}).catch(() => {{ discSlot.textContent = 'Could not load disclosed items.'; }});
-  }}
-
-  const contractsSlot = row.querySelector('.contracts-slot');
-  if (contractsSlot && !row.dataset.contractsLoaded) {{
-    row.dataset.contractsLoaded = '1';
-    contractsSlot.textContent = 'Loading contracts and purchase orders…';
-    loadContractRows(e).then(txns => {{
-      contractsSlot.innerHTML = renderContractRows(txns);
-    }}).catch(() => {{ contractsSlot.textContent = 'Could not load contracts.'; }});
-  }}
+  openDossier(Number(row.dataset.idx));
 }});
+
+dossier.addEventListener('click', ev => {{
+  const closeBtn = ev.target.closest('.dossier-close');
+  if (closeBtn) {{ resetDossier(); return; }}
+
+  const dlBtn = ev.target.closest('.dl-btn');
+  if (!dlBtn) return;
+  const e = renderedRows[selectedIdx];
+  if (!e) return;
+  const wantsCf = e.sources.includes('campaign_finance');
+  const wantsPos = e.sources.includes('lobbying') && e.lobby_id;
+  const wantsDisc = e.sources.includes('disclosures') && e.disclosure_ids && e.disclosure_ids.length;
+  const wantsContracts = e.sources.includes('contracts');
+  dlBtn.disabled = true;
+  dlBtn.textContent = 'Preparing…';
+  Promise.all([
+    wantsCf ? loadCampaignFinanceRows() : Promise.resolve(null),
+    wantsCf ? loadCampaignExpenditures() : Promise.resolve(null),
+    wantsPos ? loadLobbyingPositions() : Promise.resolve(null),
+    wantsDisc ? loadDisclosureItems() : Promise.resolve(null),
+    wantsContracts ? loadContractRows(e) : Promise.resolve(null),
+  ]).then(([rowsData, expendData, positionsData, itemsData, contractTxns]) => {{
+    const cfTxns = rowsData ? campaignFinanceTxns(e, rowsData) : [];
+    const spending = expendData ? campaignExpenditures(e, expendData) : [];
+    const positions = positionsData ? (positionsData[e.lobby_id] || []) : [];
+    const items = itemsData ? disclosureItems(e, itemsData) : [];
+    downloadCSV(slugify(e.name) + '.csv',
+      entityToCSVRows(e, cfTxns, spending, positions, items, contractTxns || []));
+  }}).catch(() => {{
+    downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, [], [], [], [], []));
+  }}).finally(() => {{
+    dlBtn.disabled = false;
+    dlBtn.textContent = 'Download this entity as CSV';
+  }});
+}});
+
 // Filters one itemized table's rows in place, delegated so it works for
 // tables injected later by the lazy fetches above.
-list.addEventListener('input', ev => {{
+dossier.addEventListener('input', ev => {{
   const inp = ev.target.closest('.txn-filter');
   if (!inp) return;
   const term = inp.value.trim().toLowerCase();
@@ -1437,6 +1515,8 @@ list.addEventListener('input', ev => {{
     tr.hidden = !!term && !tr.textContent.toLowerCase().includes(term);
   }});
 }});
+
+scrim.addEventListener('click', resetDossier);
 pills.addEventListener('click', ev => {{
   const btn = ev.target.closest('.pill');
   if (!btn) return;
