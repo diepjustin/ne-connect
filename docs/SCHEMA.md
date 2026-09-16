@@ -265,6 +265,42 @@ return, Excel/Sheets can read it as a formula on open. `csvCell()` prefixes
 such values with a bare `'` before the existing quote-escaping, same fix
 applied retroactively to every CSV export this page produces.
 
+**Itemized tables are scrollable and searchable, not an inline dump.** All
+four itemized sections (contributions, spending, positions, disclosure
+items) render through one shared `itemizedBlock()` helper: a heading, a
+text filter box (delegated `input` listener on `list`, live substring
+match), and a 320px scrollable table capped at 500 DOM rows with a note
+pointing at the CSV download for anything beyond that. The download
+button sits above these sections, not below -- real feedback was that a
+long table pushed it out of reach. A click anywhere inside `.txns-slot`
+(the filter box, a scroll drag, an org-detail link) does not also toggle
+the entity closed; without that guard, focusing the filter box collapsed
+the whole section.
+
+## Cross-fetch: `ne-campaign-finance`'s `d/disclosure_items.json`
+
+Added 2026-09-15. Unlike campaign finance's alias-guessing, this join needs
+none: `disclosure_id` is the state's own filing id, already the exact
+`source_id` `load_disclosure_filers()` keys its `Party` objects by.
+Entities can hold more than one (a filer with disclosures in different
+years), so `build_full_index()`/`build_entities()` expose a
+**`disclosure_ids` list**, not a single id like `lobby_id` -- the one
+material difference from the lobbying pattern.
+
+`build_disclosure_items_index()` in `ne-campaign-finance/scripts/build_site.py`
+writes `{disclosure_id: [[item_type, counterparty_name_raw, detail, ocr,
+era], ...]}` from `financial_interests.csv` + `financial_interests_legacy.csv`
+(the latter doesn't exist on this machine yet -- read gracefully, same as
+every other optional legacy file). The real data-quality caveat from
+`load_disclosure_filers()`'s own docstring is unchanged and renders inline:
+a line-fallback parser on several item types (`real_property`,
+`other_financial_interest`, `gift`) can pick up the form's own
+instructional boilerplate as if it were the filer's actual answer --
+confirmed live against Rex A Adams's real disclosure ("Type have nothing
+to report, write NONE" rendered as an item). `ocr: true` rows (most Manual
+filings) are flagged per-row; the state's own text is never rewritten
+either way (CLAUDE.md rule 1), only flagged for a reader's confidence.
+
 ## Dedup contract, by source
 
 See `PLAN.md`'s dedup table — it is the one place this is kept current, since

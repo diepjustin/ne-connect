@@ -22,16 +22,15 @@ Exploration found the hub shipping in a degraded state and the lobbying collecti
 - `ne-connect/new/`: fold `docs/*.md` and `CLAUDE.md` into `ne-connect/`, delete the rest.
 
 **Open work: itemized records for the other three sources (added
-2026-09-15, lobbying done 2026-09-15).** Campaign finance and lobbying are
-done (above); the "fetch from the source project's own files" approach the
-owner chose does not transfer cleanly to what's left without new export
-work first:
+2026-09-15, lobbying done 2026-09-15, disclosures done 2026-09-15).**
+Campaign finance, lobbying, and disclosures are done (this section and
+below); the "fetch from the source project's own files" approach the owner
+chose does not transfer cleanly to what's left without new export work
+first:
 - **Contracts** has its own bespoke binary full-text search index (token
   files, posting lists), not a simple per-vendor JSON -- integrating it means
   either reverse-engineering that format from ne-connect's JS or having
   `ne-contracts` publish a plain per-vendor JSON alongside it.
-- **Disclosures** (`financial_interests.csv`/`financial_interests_legacy.csv`)
-  have no dedicated search page or lazy JSON at all today.
 - **FEC** individual contributions are moot until `indiv24.zip` is pulled;
   committees/candidates are already fully shown (no itemized breakdown to add).
 
@@ -77,6 +76,40 @@ description or payee name starting with `=`/`+`/`-`/`@`/tab/CR could open
 as a live formula in Excel) caught by an automated security review of the
 CSV-download commit and fixed the same day. 120 tests passing in
 `ne-connect` (5 new), 121 in `ne-campaign-finance` (3 new).
+
+**Two more fixes shipped the same day, both from direct feedback on the
+CSV/itemized-table work above**: the download button moved above the
+itemized tables (it was getting lost below a 200-row inline dump), and all
+four itemized sections (contributions, spending, positions, and now
+disclosure items below) render through a shared scrollable, searchable
+`itemizedBlock()` instead of a flat page-length table. A real bug was
+caught wiring the filter box: any click inside an itemized table bubbled
+up and collapsed the entity it lived in; fixed with an early return on
+clicks inside `.txns-slot`.
+
+**Disclosures, done 2026-09-15** (project owner: "start on disclosures
+next"). C-1/C-2 financial-interest items are the third source to get this
+treatment, and the simplest join yet: unlike campaign finance's
+alias-guessing, `disclosure_id` is the state's own filing id, already the
+exact `source_id` `load_disclosure_filers()` keys its `Party` objects by --
+no guessing needed. `ne-campaign-finance/scripts/build_site.py` gained
+`build_disclosure_items_index()` -> `d/disclosure_items.json`, keyed by
+`disclosure_id`, reading `financial_interests.csv` +
+`financial_interests_legacy.csv` (the legacy file doesn't exist on this
+machine yet -- handled gracefully, same as every other optional legacy
+file). Because one person can file more than one disclosure,
+`build_full_index()`/`build_entities()` in `ne-connect` expose a
+**`disclosure_ids` list** (not a single id like `lobby_id`). Verified live
+against the real data: Rex A Adams (42 disclosed items) rendered
+correctly, including several rows that are visibly OCR-garbled form
+instructions rather than real answers ("Type have nothing to report,
+write NONE") -- exactly the known data-quality issue
+`load_disclosure_filers()`'s docstring already flagged, now visible to a
+reader with the caveat rendered directly beneath the table rather than
+buried in documentation. 124 tests passing in `ne-campaign-finance` (3
+new); `ne-connect`'s own test count is unchanged (the disclosure-items
+render/fetch logic is JS, not covered by its Python suite, same as every
+other itemized table).
 
 **Verified state driving Phase 0** (paths under repo root):
 - Position sweep died on an uncaught `requests.ReadTimeout` after legislature 109. `ne-lobbying/scripts/lobby.py:161-178` retries only HTTP 429; `:436-441` catches only `KeyboardInterrupt`/`RateLimited`. `sweep_all.sh:19-22` treats a vanished pid as "finished", so 108-3, 108, 107-1, 107, 106, 105 were never started. 39,909 positions for 109 only.

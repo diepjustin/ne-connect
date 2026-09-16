@@ -88,6 +88,11 @@ INDEX_COLUMNS = [
     # is header-only until indiv24.zip is pulled, and a $0 column would
     # misleadingly assert "checked, found nothing" rather than "not loaded".
     "fec_recs",
+    # disclosure_ids is a list, not a single id like lobby_id: one person can
+    # file more than one disclosure (different years), each with its own
+    # disclosure_id, all sharing one normalized-key entity. Appended last to
+    # match build_full_index()'s append order -- see that function.
+    "disclosure_ids",
 ]
 
 
@@ -222,6 +227,7 @@ def build_entities():
         era_totals = defaultdict(lambda: {"records": 0, "amount": 0.0})
         aliases = {}
         lobby_id = ""
+        disclosure_ids = []
         for member in members:
             source = member["source"]
             totals[source]["records"] += int(member["records"] or 0)
@@ -232,6 +238,8 @@ def build_entities():
                 era_totals[era]["amount"] += float(member["amount"] or 0)
             if source == "lobbying" and member.get("source_id"):
                 lobby_id = member["source_id"]
+            if source == "disclosures" and member.get("source_id"):
+                disclosure_ids.append(member["source_id"])
             # One row per distinct spelling, remembering where it was seen.
             aliases.setdefault(member["alias"], {"sources": set(), "url": ""})
             aliases[member["alias"]]["sources"].add(source)
@@ -263,6 +271,11 @@ def build_entities():
                 # same field name build_full_index() already uses for the lazy
                 # index's lobby_id column.
                 "lobby_id": lobby_id,
+                # A list, not a single id: one person can file more than one
+                # disclosure (different years), each its own disclosure_id,
+                # all sharing this entity. Join key for
+                # ../ne-campaign-finance/d/disclosure_items.json.
+                "disclosure_ids": sorted(set(disclosure_ids)),
                 "match": next(
                     (
                         reasons[m["normalized_key"]]
@@ -316,6 +329,7 @@ def build_full_index(rows):
         # index's contrib_eras -- never summed into one figure.
         era_totals = defaultdict(lambda: [0, 0.0])
         lobby_id = ""
+        disclosure_ids = []
         for member in members:
             bits |= SOURCE_BITS[member["source"]]
             totals[member["source"]][0] += int(member["records"] or 0)
@@ -326,6 +340,8 @@ def build_full_index(rows):
                 era_totals[era][1] += float(member["amount"] or 0)
             if member["source"] == "lobbying" and member.get("source_id"):
                 lobby_id = member["source_id"]
+            if member["source"] == "disclosures" and member.get("source_id"):
+                disclosure_ids.append(member["source_id"])
         contracts = totals["contracts"]
         finance_modern = era_totals["modern"]
         finance_legacy = era_totals["pre2022"]
@@ -344,6 +360,7 @@ def build_full_index(rows):
             round(finance_legacy[1]), finance_legacy[0],
             disclosures[0],
             fec[0],
+            sorted(set(disclosure_ids)),
         ])
     index.sort(key=lambda e: (-bin(e[1]).count("1"), -e[2], e[0]))
     return index
@@ -836,6 +853,8 @@ function render(rows, pool) {{
       ? '<div class="txns-slot spend-slot"></div>' : '';
     const posSlot = e.sources.includes('lobbying') && e.lobby_id
       ? '<div class="txns-slot pos-slot"></div>' : '';
+    const discSlot = e.sources.includes('disclosures') && e.disclosure_ids && e.disclosure_ids.length
+      ? '<div class="txns-slot disc-slot"></div>' : '';
 
     return '<div class="entity" data-idx="' + idx + '">' +
       '<div class="etop">' +
@@ -854,7 +873,7 @@ function render(rows, pool) {{
       // CSV export is fine. A 'download all 240,000 contributors' button is
       // not.") -- never add a site-wide or filtered-list export button.
       '<button class="dl-btn" type="button">Download this entity as CSV</button>' +
-      txnsSlot + spendSlot + posSlot +
+      txnsSlot + spendSlot + posSlot + discSlot +
       '</div></div>';
   }}).join('');
 }}
@@ -899,12 +918,13 @@ function widen(row) {{
   }}
   const name = row[COL.name];
   const lobbyId = row[COL.lobby_id];
+  const disclosureIds = row[COL.disclosure_ids] || [];
   const aliases = (row[COL.aliases] || []).map(n => ({{
     name: n, sources, url: '',
   }}));
   return {{
     name, sources, totals, contrib_eras: contribEras, aliases, match: null,
-    hard_id: false, lite: true, lobby_id: lobbyId,
+    hard_id: false, lite: true, lobby_id: lobbyId, disclosure_ids: disclosureIds,
     links: Object.fromEntries(sources.map(s => [s, SOURCE_LINK[s](name, lobbyId)])),
   }};
 }}
@@ -1088,6 +1108,49 @@ function renderPositionsTable(positions) {{
   );
 }}
 
+// Same lazy, cache-once pattern -- financial-interest items, keyed by the
+// state's own disclosure_id (an exact join key, no alias-guessing needed:
+// e.disclosure_ids already carries every filing this entity has).
+let DISCLOSURE_ITEMS = null;
+function loadDisclosureItems() {{
+  if (DISCLOSURE_ITEMS) return Promise.resolve(DISCLOSURE_ITEMS);
+  return fetch('../ne-campaign-finance/d/disclosure_items.json').then(r => r.json())
+    .then(j => {{ DISCLOSURE_ITEMS = j; return j; }});
+}}
+
+function disclosureItems(e, itemsData) {{
+  const items = [];
+  (e.disclosure_ids || []).forEach(id => {{ (itemsData[id] || []).forEach(it => items.push(it)); }});
+  return items;
+}}
+
+// Real data-quality caveat (see ne-connect's load_disclosure_filers()
+// docstring and docs/SCHEMA.md): a line-fallback parser on several item
+// types can pick up the form's own instructional boilerplate as if it were
+// the filer's answer, and most Manual filings are OCR'd from a scanned
+// form. The state's own words either way (CLAUDE.md rule 1) -- never
+// rewritten, just flagged for a reader's confidence.
+function renderDisclosureItems(items) {{
+  const block = itemizedBlock(
+    'Financial-interest items disclosed',
+    ['Item type', 'Named', 'Detail'],
+    items,
+    it => {{
+      const [itemType, counterparty, detail, ocr, era] = it;
+      const ocrNote = ocr ? ' <span class="era-tag">OCR</span>' : '';
+      const legacyNote = era === 'pre2022' ? ' <span class="era-tag">pre-2022</span>' : '';
+      return '<tr><td>' + esc(itemType.replace(/_/g, ' ')) + legacyNote + '</td><td>' +
+        esc(counterparty) + ocrNote + '</td><td>' + esc(detail) + '</td></tr>';
+    }},
+    'Filter by name or detail…'
+  );
+  if (!block) return '';
+  return block + '<p class="hint">Self-reported by the filer. Some rows are ' +
+    'extracted by OCR from a scanned form and can be noisy, and a few item ' +
+    'types occasionally pick up the form\\'s own instructions rather than a ' +
+    'real answer -- verify against the original filing before quoting.</p>';
+}}
+
 // Per-entity export only -- see the PRIVACY comment at the button's markup.
 // One flat CSV, a record_type column distinguishing rows shaped differently
 // (a summary line, a name variant, an itemized transaction, a lobbying
@@ -1096,7 +1159,7 @@ function renderPositionsTable(positions) {{
 const CSV_HEADER = [
   'entity', 'record_type', 'source', 'date', 'amount', 'records', 'recipient',
   'city_state', 'description', 'era', 'legislature', 'bill', 'position',
-  'lobbyist', 'note',
+  'lobbyist', 'item_type', 'ocr', 'note',
 ];
 
 function csvCell(v) {{
@@ -1110,7 +1173,7 @@ function csvCell(v) {{
   return /["\\n,]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }}
 
-function entityToCSVRows(e, cfTxns, spending, positions) {{
+function entityToCSVRows(e, cfTxns, spending, positions, discItems) {{
   const rows = [CSV_HEADER];
   const push = obj => rows.push(CSV_HEADER.map(col => obj[col] ?? ''));
 
@@ -1172,6 +1235,15 @@ function entityToCSVRows(e, cfTxns, spending, positions) {{
     }});
   }});
 
+  (discItems || []).forEach(it => {{
+    const [itemType, counterparty, detail, ocr, era] = it;
+    push({{
+      entity: e.name, record_type: 'disclosure_item', source: 'disclosures',
+      recipient: counterparty, description: detail, era, item_type: itemType,
+      ocr: ocr ? 'true' : 'false',
+    }});
+  }});
+
   return rows;
 }}
 
@@ -1206,19 +1278,22 @@ list.addEventListener('click', ev => {{
     if (!e) return;
     const wantsCf = e.sources.includes('campaign_finance');
     const wantsPos = e.sources.includes('lobbying') && e.lobby_id;
+    const wantsDisc = e.sources.includes('disclosures') && e.disclosure_ids && e.disclosure_ids.length;
     dlBtn.disabled = true;
     dlBtn.textContent = 'Preparing…';
     Promise.all([
       wantsCf ? loadCampaignFinanceRows() : Promise.resolve(null),
       wantsCf ? loadCampaignExpenditures() : Promise.resolve(null),
       wantsPos ? loadLobbyingPositions() : Promise.resolve(null),
-    ]).then(([rowsData, expendData, positionsData]) => {{
+      wantsDisc ? loadDisclosureItems() : Promise.resolve(null),
+    ]).then(([rowsData, expendData, positionsData, itemsData]) => {{
       const cfTxns = rowsData ? campaignFinanceTxns(e, rowsData) : [];
       const spending = expendData ? campaignExpenditures(e, expendData) : [];
       const positions = positionsData ? (positionsData[e.lobby_id] || []) : [];
-      downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, cfTxns, spending, positions));
+      const items = itemsData ? disclosureItems(e, itemsData) : [];
+      downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, cfTxns, spending, positions, items));
     }}).catch(() => {{
-      downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, [], [], []));
+      downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, [], [], [], []));
     }}).finally(() => {{
       dlBtn.disabled = false;
       dlBtn.textContent = 'Download this entity as CSV';
@@ -1259,6 +1334,15 @@ list.addEventListener('click', ev => {{
     loadLobbyingPositions().then(positionsData => {{
       posSlot.innerHTML = renderPositionsTable(positionsData[e.lobby_id] || []);
     }}).catch(() => {{ posSlot.textContent = 'Could not load registered positions.'; }});
+  }}
+
+  const discSlot = row.querySelector('.disc-slot');
+  if (discSlot && !row.dataset.discLoaded) {{
+    row.dataset.discLoaded = '1';
+    discSlot.textContent = 'Loading disclosed items…';
+    loadDisclosureItems().then(itemsData => {{
+      discSlot.innerHTML = renderDisclosureItems(disclosureItems(e, itemsData));
+    }}).catch(() => {{ discSlot.textContent = 'Could not load disclosed items.'; }});
   }}
 }});
 // Filters one itemized table's rows in place, delegated so it works for
