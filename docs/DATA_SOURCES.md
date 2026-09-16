@@ -389,11 +389,28 @@ redistributing any of it.**
 - **Legal basis for this project's access:** this project does not scrape
   `nebraska.gov` itself — the pull already happened, once, in the source
   repo, which publishes its output under an MIT license permitting reuse.
-  CLAUDE.md rule 6 ("scrapers are polite... if a source's terms forbid
-  automated access, do not scrape it") governs *scrapers*; there is no
-  scraper of this project's own here to gate. What this project does
-  instead — reading an already-published, already-licensed CSV the same way
-  it reads every other sibling repo's `data/` — carries none of that risk.
+  What this project does instead — reading an already-published,
+  already-licensed CSV the same way it reads every other sibling repo's
+  `data/` — carries none of the risk described below.
+- **Terms-of-use gate (CLAUDE.md rule 6), checked 2026-09-16 — a recurring
+  scraper of this project's own is BLOCKED, same as SoS.** The Auditor's
+  Basic Budget Data Query tool is served from `www.nebraska.gov`, and that
+  domain's own Terms of Use (`nebraska.gov/policies/`) states, quoted
+  exactly:
+  > "You may not without our prior written permission use any computer
+  > code, data mining software, 'robot,' 'bot,' 'spider,' 'scraper' or other
+  > automatic device, or program, algorithm or methodology having similar
+  > processes or functionality, or any manual process, to monitor or copy
+  > any of the Web pages, data or content found on this Site or accessed
+  > through this Site."
+  This is the exact same `nebraska.gov` policy that already blocked Phase 2
+  (SoS business filings) — `robots.txt` on `www.nebraska.gov` itself doesn't
+  disallow the CGI path, but the site's own Terms of Use does, in stronger
+  language than a robots.txt disallow. Per CLAUDE.md rule 6, this project
+  will not build its own recurring scraper against this endpoint. The
+  read-only clone of `nebraska-budget-data` above is unaffected — that pull
+  is the source repo's own, already done, once, before this project ever
+  touched it.
 - **Grain:** one row per (subdivision, fiscal year), 1999–2026, 63,934 rows,
   3,240 distinct subdivision names across every county, city, school
   district, fire district, SID, NRD, community college, airport authority,
@@ -413,10 +430,11 @@ redistributing any of it.**
   changed from `"Municipalities"` to `"Cities and Villages"` around
   FY2010-2011/2011-2012 — merged by `_BUDGET_TYPE_RELABEL` or 530 cities
   would each split into two entities.
-- **Update cadence:** none. A one-shot snapshot the source repo captured
-  once; this project has no scraper of its own to schedule, and there is no
-  GitHub Actions workflow for this source (a first for this project's
-  phases) since there is nothing recurring to run.
+- **Update cadence:** none, and this is not just "not yet automated" — see
+  the Terms-of-use gate above. Refreshing this source means the source
+  repo's owner re-running his own script and this project re-cloning
+  (`git pull` in the sibling directory, then rebuilding), not a scheduled
+  workflow of this project's own.
 - **Hub integration.** `ingest/sources.py` gained `load_budget_subdivisions()`
   (`entity_type="organization"` always, `total_amount` the most recent fiscal
   year's property tax request only — never summed across years, since unlike
@@ -446,6 +464,14 @@ redistributing any of it.**
 - **Legal basis for this project's access:** same as budget data above — no
   scraper of this project's own, reading an already-published MIT-licensed
   extraction.
+- **Terms-of-use gate (CLAUDE.md rule 6), checked 2026-09-16 — also
+  BLOCKED.** `revenue.nebraska.gov`'s own footer links directly to
+  `nebraska.gov/policies/` as its terms of use — the same policy and the
+  same anti-scraper clause quoted in the budget-data section above. `robots.txt`
+  on `revenue.nebraska.gov` (a standard Drupal file) doesn't disallow
+  `/about/news-releases/...`, but the site's own Terms of Use does, in
+  stronger language than robots.txt. This project will not build a recurring
+  scraper against DOR's news-release archive either.
 - **Grain:** one row per (release, fiscal-month) pair, Aug 2016–present, 753
   rows. **Not entity-level** — a single statewide monthly series, never tied
   to any subdivision or organization, so it never touches `SOURCE_BITS`,
@@ -462,7 +488,8 @@ redistributing any of it.**
   units inconsistency in the underlying PDFs (some releases print thousands
   of dollars, some print full dollars) — this project surfaces the
   already-clean CSV columns as-is, without re-deriving anything.
-- **Update cadence:** none — same reasoning as budget data above.
+- **Update cadence:** none — same reasoning as budget data above (blocked by
+  terms of use, not just unscheduled).
 - **Hub integration.** `ingest/sources.py load_general_fund_receipts()` is a
   thin, undecimated pass-through of every (release, fiscal-month) row.
   `build/export_budget.py write_general_fund_receipts_json()` writes the full
