@@ -21,16 +21,9 @@ Exploration found the hub shipping in a degraded state and the lobbying collecti
   **Partially revisited 2026-09-15** at the project owner's explicit request: ne-connect should be "the main site," showing itemized records inline rather than a summary + link-out. For campaign finance, ne-connect's entity detail view now fetches `../ne-campaign-finance/d/rows.json` (that page's own already-published payload, not a duplicate) and renders the matching transaction rows inline, still linking to `?q=` as the fallback and the place to see everything else about that page. See `docs/SCHEMA.md`'s "Cross-fetch" section. Contracts, lobbying, disclosures and FEC individual contributions are NOT done yet -- see the note after this list.
 - `ne-connect/new/`: fold `docs/*.md` and `CLAUDE.md` into `ne-connect/`, delete the rest.
 
-**Open work: itemized records for the other three sources (added
-2026-09-15, lobbying done 2026-09-15, disclosures done 2026-09-15).**
-Campaign finance, lobbying, and disclosures are done (this section and
-below); the "fetch from the source project's own files" approach the owner
-chose does not transfer cleanly to what's left without new export work
-first:
-- **Contracts** has its own bespoke binary full-text search index (token
-  files, posting lists), not a simple per-vendor JSON -- integrating it means
-  either reverse-engineering that format from ne-connect's JS or having
-  `ne-contracts` publish a plain per-vendor JSON alongside it.
+**Open work: itemized records (added 2026-09-15, lobbying done
+2026-09-15, disclosures done 2026-09-15, contracts done 2026-09-15).** All
+four practical sources are done now (this section and below):
 - **FEC** individual contributions are moot until `indiv24.zip` is pulled;
   committees/candidates are already fully shown (no itemized breakdown to add).
 
@@ -110,6 +103,49 @@ buried in documentation. 124 tests passing in `ne-campaign-finance` (3
 new); `ne-connect`'s own test count is unchanged (the disclosure-items
 render/fetch logic is JS, not covered by its Python suite, same as every
 other itemized table).
+
+**Contracts, done 2026-09-15** (project owner: "The contract database is
+live at ne-contracts"). The fourth and hardest of the four: `ne-contracts`
+already runs a large, tightly-verified real search build
+(`scripts/build_site.py`, a bespoke binary index with its own selftest
+machinery) that this deliberately never touches. A new, fully independent
+`ne-contracts/scripts/export_vendor_rows.py` reads `nu_contracts.csv` +
+`nu_purchase_orders.csv` directly, same "thin adapter" pattern as the other
+three sources.
+
+**A real, hard technical constraint surfaced building this, not just a
+design choice**: a single combined export came to ~190 MB (one vendor,
+Amazon Capital Services, accounts for ~25 MB of it across ~66,900
+purchase-order line items) -- past GitHub's hard 100 MB per-file push
+limit, discovered by actually building the file and hitting the wall.
+Fixed by sharding `d/rows/<A-Z|_>.json` by the vendor name's first
+character (27 shards, largest ~42 MB) rather than truncating any real
+record; ne-connect's JS mirrors the same shard key and fetches only the
+shard(s) a vendor's name and aliases fall into, caching each shard
+individually. Verified live against real data: Hawkins Construction
+Company's 81 contracts/purchase-orders rendered correctly (agency, amount,
+dates, status, linked to the real `statecontracts.nebraska.gov` document),
+alongside its lobbying positions in the same expanded row, and the
+per-entity CSV export includes contract rows with the real detail URL.
+
+**A second real constraint, found reading `ne-contracts`'s own history
+before touching it**: this repo does not commit its `d/` payload at
+all -- a comment in `.github/workflows/pages.yml` explains it once did,
+until a 50 MB payload's retired build directories bloated `.git` to
+546 MB, and the fix was building at deploy time and publishing the
+artifact without ever committing it. Committing a 190 MB sharded export
+would have reintroduced exactly that problem at a larger scale. Instead,
+`pages.yml` gained one new step, "Export vendor rows for ne-connect",
+placed after the existing "Keep only the build just made" cleanup (so a
+`d/rows/` entry isn't swept away as an unrecognized build directory) and
+before "Save the payload for the next run" (so it rides along in the
+same cache entry `build_site.py`'s own payload already uses). `d/rows/`
+is gitignored, matching every other build output in this repo -- nothing
+new committed, same as before this change.
+
+183 tests passing in `ne-contracts` (175 pre-existing, confirmed still
+green, plus 8 new); `ne-connect`'s own test count is unchanged (same
+JS-only reasoning as the other three itemized tables).
 
 **Verified state driving Phase 0** (paths under repo root):
 - Position sweep died on an uncaught `requests.ReadTimeout` after legislature 109. `ne-lobbying/scripts/lobby.py:161-178` retries only HTTP 429; `:436-441` catches only `KeyboardInterrupt`/`RateLimited`. `sweep_all.sh:19-22` treats a vanished pid as "finished", so 108-3, 108, 107-1, 107, 106, 105 were never started. 39,909 positions for 109 only.

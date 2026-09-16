@@ -442,6 +442,8 @@ function render(rows, pool) {
       ? '<div class="txns-slot pos-slot"></div>' : '';
     const discSlot = e.sources.includes('disclosures') && e.disclosure_ids && e.disclosure_ids.length
       ? '<div class="txns-slot disc-slot"></div>' : '';
+    const contractsSlot = e.sources.includes('contracts')
+      ? '<div class="txns-slot contracts-slot"></div>' : '';
 
     return '<div class="entity" data-idx="' + idx + '">' +
       '<div class="etop">' +
@@ -460,7 +462,7 @@ function render(rows, pool) {
       // CSV export is fine. A 'download all 240,000 contributors' button is
       // not.") -- never add a site-wide or filtered-list export button.
       '<button class="dl-btn" type="button">Download this entity as CSV</button>' +
-      txnsSlot + spendSlot + posSlot + discSlot +
+      txnsSlot + spendSlot + posSlot + discSlot + contractsSlot +
       '</div></div>';
   }).join('');
 }
@@ -738,6 +740,60 @@ function renderDisclosureItems(items) {
     'real answer -- verify against the original filing before quoting.</p>';
 }
 
+// ne-contracts' export is sharded by the vendor name's first letter (one
+// vendor alone -- Amazon Capital Services, ~66,900 line items -- made a
+// combined file ~190 MB, past GitHub's 100 MB per-file push limit). This
+// mirrors shard_key() in ne-contracts/scripts/export_vendor_rows.py; keep
+// the two in sync. Shards are cached individually as they're fetched, not
+// all 27 up front.
+function contractShardKey(name) {
+  const first = (name || '').trim().slice(0, 1).toUpperCase();
+  return (first >= 'A' && first <= 'Z') ? first : '_';
+}
+
+const CONTRACT_SHARDS = {};
+function loadContractShard(key) {
+  if (CONTRACT_SHARDS[key]) return CONTRACT_SHARDS[key];
+  const p = fetch('../ne-contracts/d/rows/' + key + '.json').then(r => r.json())
+    .catch(() => ({}));
+  CONTRACT_SHARDS[key] = p;
+  return p;
+}
+
+// A cross-source entity's contract-side aliases can start with different
+// letters (a renamed vendor, a DBA) -- fetch every shard any candidate name
+// falls into, same alias-guessing reason as campaign finance's rows.json.
+function loadContractRows(e) {
+  const keys = new Set([e.name, ...e.aliases.map(a => a.name)]);
+  const shardKeys = new Set([...keys].map(contractShardKey));
+  return Promise.all([...shardKeys].map(loadContractShard)).then(shardDatas => {
+    const txns = [];
+    shardDatas.forEach(data => {
+      keys.forEach(k => { (data[k] || []).forEach(t => txns.push(t)); });
+    });
+    txns.sort((a, b) => (b[4] || '').localeCompare(a[4] || ''));
+    return txns;
+  });
+}
+
+function renderContractRows(txns) {
+  return itemizedBlock(
+    'Itemized contracts and purchase orders',
+    ['Document', 'Type', 'Agency', 'Amount', 'Begin', 'End', 'Status'],
+    txns,
+    t => {
+      const [docNumber, docType, entityName, amount, beginDate, endDate, status, detailUrl] = t;
+      const doc = detailUrl
+        ? '<a href="' + esc(detailUrl) + '" target="_blank" rel="noopener">' + esc(docNumber) + '</a>'
+        : esc(docNumber);
+      return '<tr><td>' + doc + '</td><td>' + esc(docType) + '</td><td>' + esc(entityName) +
+        '</td><td class="n">' + cfMoney(amount) + '</td><td>' + esc(beginDate) + '</td>' +
+        '<td>' + esc(endDate) + '</td><td>' + esc(status) + '</td></tr>';
+    },
+    'Filter by agency, status, or document…'
+  );
+}
+
 // Per-entity export only -- see the PRIVACY comment at the button's markup.
 // One flat CSV, a record_type column distinguishing rows shaped differently
 // (a summary line, a name variant, an itemized transaction, a lobbying
@@ -746,7 +802,8 @@ function renderDisclosureItems(items) {
 const CSV_HEADER = [
   'entity', 'record_type', 'source', 'date', 'amount', 'records', 'recipient',
   'city_state', 'description', 'era', 'legislature', 'bill', 'position',
-  'lobbyist', 'item_type', 'ocr', 'note',
+  'lobbyist', 'item_type', 'ocr', 'document_number', 'end_date', 'status',
+  'note',
 ];
 
 function csvCell(v) {
@@ -760,7 +817,7 @@ function csvCell(v) {
   return /["\n,]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 
-function entityToCSVRows(e, cfTxns, spending, positions, discItems) {
+function entityToCSVRows(e, cfTxns, spending, positions, discItems, contractTxns) {
   const rows = [CSV_HEADER];
   const push = obj => rows.push(CSV_HEADER.map(col => obj[col] ?? ''));
 
@@ -831,6 +888,15 @@ function entityToCSVRows(e, cfTxns, spending, positions, discItems) {
     });
   });
 
+  (contractTxns || []).forEach(t => {
+    const [docNumber, docType, entityName, amount, beginDate, endDate, status, detailUrl] = t;
+    push({
+      entity: e.name, record_type: 'contract', source: 'contracts',
+      date: beginDate, amount, recipient: entityName, description: docType,
+      document_number: docNumber, end_date: endDate, status, note: detailUrl,
+    });
+  });
+
   return rows;
 }
 
@@ -866,6 +932,7 @@ list.addEventListener('click', ev => {
     const wantsCf = e.sources.includes('campaign_finance');
     const wantsPos = e.sources.includes('lobbying') && e.lobby_id;
     const wantsDisc = e.sources.includes('disclosures') && e.disclosure_ids && e.disclosure_ids.length;
+    const wantsContracts = e.sources.includes('contracts');
     dlBtn.disabled = true;
     dlBtn.textContent = 'Preparing…';
     Promise.all([
@@ -873,14 +940,16 @@ list.addEventListener('click', ev => {
       wantsCf ? loadCampaignExpenditures() : Promise.resolve(null),
       wantsPos ? loadLobbyingPositions() : Promise.resolve(null),
       wantsDisc ? loadDisclosureItems() : Promise.resolve(null),
-    ]).then(([rowsData, expendData, positionsData, itemsData]) => {
+      wantsContracts ? loadContractRows(e) : Promise.resolve(null),
+    ]).then(([rowsData, expendData, positionsData, itemsData, contractTxns]) => {
       const cfTxns = rowsData ? campaignFinanceTxns(e, rowsData) : [];
       const spending = expendData ? campaignExpenditures(e, expendData) : [];
       const positions = positionsData ? (positionsData[e.lobby_id] || []) : [];
       const items = itemsData ? disclosureItems(e, itemsData) : [];
-      downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, cfTxns, spending, positions, items));
+      downloadCSV(slugify(e.name) + '.csv',
+        entityToCSVRows(e, cfTxns, spending, positions, items, contractTxns || []));
     }).catch(() => {
-      downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, [], [], [], []));
+      downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, [], [], [], [], []));
     }).finally(() => {
       dlBtn.disabled = false;
       dlBtn.textContent = 'Download this entity as CSV';
@@ -930,6 +999,15 @@ list.addEventListener('click', ev => {
     loadDisclosureItems().then(itemsData => {
       discSlot.innerHTML = renderDisclosureItems(disclosureItems(e, itemsData));
     }).catch(() => { discSlot.textContent = 'Could not load disclosed items.'; });
+  }
+
+  const contractsSlot = row.querySelector('.contracts-slot');
+  if (contractsSlot && !row.dataset.contractsLoaded) {
+    row.dataset.contractsLoaded = '1';
+    contractsSlot.textContent = 'Loading contracts and purchase orders…';
+    loadContractRows(e).then(txns => {
+      contractsSlot.innerHTML = renderContractRows(txns);
+    }).catch(() => { contractsSlot.textContent = 'Could not load contracts.'; });
   }
 });
 // Filters one itemized table's rows in place, delegated so it works for

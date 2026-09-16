@@ -301,6 +301,47 @@ to report, write NONE" rendered as an item). `ocr: true` rows (most Manual
 filings) are flagged per-row; the state's own text is never rewritten
 either way (CLAUDE.md rule 1), only flagged for a reader's confidence.
 
+## Cross-fetch: `ne-contracts`'s `d/rows/<A-Z|_>.json`
+
+Added 2026-09-15, the fourth and (for now) last source to get itemized
+detail. Unlike the other three, `ne-contracts` already runs a large,
+tightly-verified real search build (`scripts/build_site.py`: a bespoke
+binary index -- token files, posting lists, its own selftest/verification
+machinery). That script is untouched; a new, fully independent
+`scripts/export_vendor_rows.py` reads `nu_contracts.csv` +
+`nu_purchase_orders.csv` directly and writes its own export, exactly the
+"thin, separate adapter" pattern used everywhere else in this project.
+
+**Sharded, not one file, and this was a real constraint, not a
+preference.** A single combined export is ~190 MB -- one vendor alone
+(Amazon Capital Services, ~66,900 purchase-order line items) accounts for
+~25 MB of it -- well past GitHub's **hard 100 MB per-file push limit**,
+confirmed by actually building the unsharded file and hitting the wall.
+`export_vendor_rows.py`'s `shard_key()` buckets by the vendor name's first
+character (A-Z, `_` for anything else) into `d/rows/<KEY>.json`: 27 shards,
+largest ~42 MB, comfortably under even the 50 MB warning threshold. No
+record was truncated to make this fit. ne-connect's JS mirrors the same
+`shard_key()` logic (`contractShardKey()`) and fetches only the shard(s) a
+looked-up vendor's name and aliases fall into, caching each shard
+individually as it's fetched rather than loading all 27 up front.
+
+**Not committed at all -- `d/rows/` is gitignored,** matching every other
+build artifact in `ne-contracts`. That repo stopped committing its `d/`
+payload entirely after doing so once bloated `.git` to 546 MB (see the
+comment at the top of `.github/workflows/pages.yml`); committing a 190 MB
+sharded export would reintroduce the same problem at a larger scale.
+`pages.yml` instead runs `export_vendor_rows.py` at deploy time, placed
+after the workflow's own build-directory cleanup step (so a `rows/` entry
+isn't swept away as an unrecognized build dir) and before the payload gets
+cached for the next run, so it rides along in that cache entry the same
+way `build_site.py`'s own search payload already does.
+
+Row shape: `[document_number, document_type, entity_name, amount,
+begin_date, end_date, status, detail_url]`, keyed by the exact raw
+"Vendor" string -- the same key `ingest/sources.py load_contract_vendors()`
+already uses, so the alias-guessing lookup is identical to campaign
+finance's.
+
 ## Dedup contract, by source
 
 See `PLAN.md`'s dedup table — it is the one place this is kept current, since
