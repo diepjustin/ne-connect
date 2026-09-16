@@ -141,6 +141,50 @@ organizations:
     source: ""
   # TODO: complete the remaining NRDs before Phase 4.
 
+# Local-government subdivisions, from nebraska-budget-data. That source's own
+# subdivision_name is bare ("Lincoln", "Omaha") while contracts/lobbying
+# already use "City of X" -- normalize.py does not reorder tokens, so
+# weighted_jaccard alone shares only one of three tokens ("LINCOLN" vs "CITY
+# OF LINCOLN") and common tokens like CITY are unlikely to clear the
+# auto-accept weight floor once ~3,240 subdivision names are in the corpus.
+# Counties need no entries here: budget-data's own subdivision_name for a
+# county already IS "<Name> County" -- the exact spelling contracts/lobbying
+# already use (confirmed: "DOUGLAS COUNTY"/"LANCASTER COUNTY" already exist
+# as exact contract-vendor names in canonical_entities.csv). Curated to the
+# handful of cities confirmed to already have contracts/lobbying presence,
+# plus a few more of the state's largest by population as harmless
+# future-proofing -- not attempted for all ~530 Cities and Villages.
+  "City of Omaha":
+    aliases: ["Omaha"]
+    source: "nebraska-budget-data's subdivision_name is bare; contracts/lobbying use City of Omaha."
+  "City of Lincoln":
+    aliases: ["Lincoln"]
+    source: "Same bare-name gap as Omaha."
+  "City of Grand Island":
+    aliases: ["Grand Island"]
+    source: "Same bare-name gap as Omaha."
+  "City of Kearney":
+    aliases: ["Kearney"]
+    source: "Same bare-name gap as Omaha."
+  "City of Fremont":
+    aliases: ["Fremont"]
+    source: "Same bare-name gap as Omaha."
+  "City of Hastings":
+    aliases: ["Hastings"]
+    source: "Same bare-name gap as Omaha."
+  "City of Norfolk":
+    aliases: ["Norfolk"]
+    source: "Same bare-name gap as Omaha."
+  "City of Bellevue":
+    aliases: ["Bellevue"]
+    source: "No contracts/lobbying presence today; large enough to be worth pre-aliasing."
+  "City of North Platte":
+    aliases: ["North Platte"]
+    source: "No contracts/lobbying presence today; large enough to be worth pre-aliasing."
+  "City of Columbus":
+    aliases: ["Columbus"]
+    source: "No contracts/lobbying presence today; large enough to be worth pre-aliasing."
+
 people:
   # Person aliases are riskier than org aliases and need a documented reason each.
   # Format: canonical "LAST|FIRST" key -> variants seen in filings.

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import csv
 import json
+import subprocess
 import sys
 from collections import defaultdict
 from datetime import date
@@ -27,6 +28,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ingest"))
 
+# export_budget.py lives alongside this file in build/ -- Python already puts
+# a run script's own directory on sys.path, so no extra path manipulation
+# is needed to import a sibling module here.
+from export_budget import (  # noqa: E402
+    latest_gfr_by_month,
+    write_budget_rows_json,
+    write_general_fund_receipts_json,
+)
 
 DATA_DIR = ROOT / "data"
 OUT_PATH = ROOT / "index.html"
@@ -44,6 +53,8 @@ INDEX_PATH = INDEX_DIR / "entities.json"
 # phase never has to shift an existing source's bit.
 SOURCE_BITS = {
     "contracts": 1, "campaign_finance": 2, "lobbying": 4, "disclosures": 32, "fec": 16,
+    # Next free bit after 1/2/4/16/32 -- never 8, reserved for SoS above.
+    "budgets": 64,
 }
 
 SOURCE_LABELS = {
@@ -56,6 +67,7 @@ SOURCE_LABELS = {
     # 3). Label what's actually loaded; relabel once individual itemized
     # contributions land.
     "fec": "FEC Committees & Candidates",
+    "budgets": "Local Government Budgets",
 }
 
 # Where a reader goes to check a number rather than take it on trust.
@@ -68,6 +80,10 @@ SOURCE_PROJECTS = {
     # own data front door instead, same "stopgap door" pattern as 0.7's NADC
     # search-page link.
     "fec": ("https://www.fec.gov/data/", "FEC"),
+    # Unlike ne-fec's stopgap, this repo really is the canonical public
+    # source -- it's a third party's (this project's own build publishes the
+    # itemized data itself; see docs/SCHEMA.md's "Self-published" sections).
+    "budgets": ("https://github.com/mattwaite/nebraska-budget-data", "Nebraska Budget Data (Matt Waite)"),
 }
 
 # d/entities.json header. Named, not positional-by-convention: every later
@@ -93,6 +109,11 @@ INDEX_COLUMNS = [
     # disclosure_id, all sharing one normalized-key entity. Appended last to
     # match build_full_index()'s append order -- see that function.
     "disclosure_ids",
+    # budget_amt/budget_recs mirror every other source's pair, but budget_amt
+    # is a SNAPSHOT (the most recent fiscal year's property tax request), not
+    # a sum -- see sources.py's Party.fiscal_year docstring. budget_fy names
+    # which fiscal year that snapshot is from, e.g. "2025-2026".
+    "budget_amt", "budget_recs", "budget_fy",
 ]
 
 
@@ -167,6 +188,27 @@ def retrieval_dates():
                 "committees and candidates only -- individual itemized "
                 "contributions (indiv24.zip) have not been downloaded yet"
             )
+
+    # nebraska-budget-data ships no scrape_meta.json of its own -- it's a
+    # third-party repo this project doesn't own, with a one-shot committed
+    # CSV rather than a scraper reporting its own run dates. Its own git
+    # history is the only honest source for "when was this last updated."
+    budget_repo = ROOT.parent / "nebraska-budget-data"
+    budget_file = budget_repo / "nebraska_budgets_all.csv"
+    if budget_file.exists():
+        try:
+            stamp = subprocess.run(
+                ["git", "log", "-1", "--format=%aI", "--", "nebraska_budgets_all.csv"],
+                cwd=budget_repo, capture_output=True, text=True, timeout=5, check=True,
+            ).stdout.strip()
+        except (subprocess.CalledProcessError, OSError):
+            stamp = ""
+        if stamp:
+            dates["budgets"] = stamp[:10]
+        dates["budgets_note"] = (
+            "one-shot snapshot, not a recurring pull -- see "
+            "https://github.com/mattwaite/nebraska-budget-data"
+        )
     return dates
 
 
@@ -228,10 +270,27 @@ def build_entities():
         aliases = {}
         lobby_id = ""
         disclosure_ids = []
+        # budgets' amount is a SNAPSHOT (the most recent fiscal year's
+        # property tax request), never summed across members like every
+        # other source's totals -- see sources.py's Party.fiscal_year
+        # docstring. In the ordinary case there is exactly one budgets
+        # member per entity; this still does the right thing in the rare
+        # edge case of more than one by keeping whichever carries the
+        # latest fiscal_year, not adding them together.
+        budget_fiscal_year = ""
+        budget_amount = 0.0
+        budget_records = 0
         for member in members:
             source = member["source"]
-            totals[source]["records"] += int(member["records"] or 0)
-            totals[source]["amount"] += float(member["amount"] or 0)
+            if source == "budgets":
+                budget_records += int(member["records"] or 0)
+                member_fy = member.get("fiscal_year") or ""
+                if member_fy >= budget_fiscal_year:
+                    budget_fiscal_year = member_fy
+                    budget_amount = float(member["amount"] or 0)
+            else:
+                totals[source]["records"] += int(member["records"] or 0)
+                totals[source]["amount"] += float(member["amount"] or 0)
             if source == "campaign_finance":
                 era = member.get("era") or "modern"
                 era_totals[era]["records"] += int(member["records"] or 0)
@@ -245,6 +304,8 @@ def build_entities():
             aliases[member["alias"]]["sources"].add(source)
             if member.get("source_url") and not aliases[member["alias"]]["url"]:
                 aliases[member["alias"]]["url"] = member["source_url"]
+        if budget_fiscal_year:
+            totals["budgets"] = {"records": budget_records, "amount": round(budget_amount, 2)}
 
         entities.append(
             {
@@ -276,6 +337,10 @@ def build_entities():
                 # all sharing this entity. Join key for
                 # ../ne-campaign-finance/d/disclosure_items.json.
                 "disclosure_ids": sorted(set(disclosure_ids)),
+                # Which fiscal year totals["budgets"]["amount"] is "as of" --
+                # e.g. "2025-2026". Empty when this entity has no budgets
+                # source at all.
+                "budget_fiscal_year": budget_fiscal_year,
                 "match": next(
                     (
                         reasons[m["normalized_key"]]
@@ -330,10 +395,22 @@ def build_full_index(rows):
         era_totals = defaultdict(lambda: [0, 0.0])
         lobby_id = ""
         disclosure_ids = []
+        # Same snapshot-not-sum reasoning as build_entities() above -- see
+        # sources.py's Party.fiscal_year docstring.
+        budget_fiscal_year = ""
+        budget_amount = 0.0
+        budget_records = 0
         for member in members:
             bits |= SOURCE_BITS[member["source"]]
-            totals[member["source"]][0] += int(member["records"] or 0)
-            totals[member["source"]][1] += float(member["amount"] or 0)
+            if member["source"] == "budgets":
+                budget_records += int(member["records"] or 0)
+                member_fy = member.get("fiscal_year") or ""
+                if member_fy >= budget_fiscal_year:
+                    budget_fiscal_year = member_fy
+                    budget_amount = float(member["amount"] or 0)
+            else:
+                totals[member["source"]][0] += int(member["records"] or 0)
+                totals[member["source"]][1] += float(member["amount"] or 0)
             if member["source"] == "campaign_finance":
                 era = member.get("era") or "modern"
                 era_totals[era][0] += int(member["records"] or 0)
@@ -361,6 +438,7 @@ def build_full_index(rows):
             disclosures[0],
             fec[0],
             sorted(set(disclosure_ids)),
+            round(budget_amount, 2), budget_records, budget_fiscal_year,
         ])
     index.sort(key=lambda e: (-bin(e[1]).count("1"), -e[2], e[0]))
     return index
@@ -385,7 +463,7 @@ def lobbying_coverage():
     }
 
 
-def render(entities, summary, coverage, retrieved, total_indexed) -> str:
+def render(entities, summary, coverage, retrieved, total_indexed, gfr_rows) -> str:
     payload = json.dumps(entities, separators=(",", ":"))
     multi = sum(1 for e in entities if len(e["sources"]) > 1)
     all_three = sum(1 for e in entities if len(e["sources"]) == 3)
@@ -433,7 +511,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
     --bg: #faf8f4; --panel: #f2efe8; --border: #ddd6c8; --text: #211c14;
     --muted: #6b6252; --accent: #a1291f; --serif: Georgia, "Times New Roman", ui-serif, serif;
     --contracts: #3b6ea8; --finance: #3b8f63; --lobbying: #7a5fbf;
-    --disclosures: #b08a2e; --fec: #b3486b;
+    --disclosures: #b08a2e; --fec: #b3486b; --budgets: #2d7d7a;
     --support: #1c7f4e; --oppose: #b3261e; --neutral: #626b76;
   }}
   @media (prefers-color-scheme: dark) {{
@@ -441,7 +519,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
       --bg: #17140f; --panel: #201c15; --border: #383025; --text: #eee8db;
       --muted: #a89d88; --accent: #e2695c;
       --contracts: #7fb0e8; --finance: #7fce9e; --lobbying: #b79eec;
-      --disclosures: #e0b764; --fec: #e58aa8;
+      --disclosures: #e0b764; --fec: #e58aa8; --budgets: #6ecdc9;
       --support: #4cc38a; --oppose: #ff8a80; --neutral: #949dab;
     }}
   }}
@@ -471,6 +549,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
   .b-lobbying {{ background: var(--lobbying); }}
   .b-disclosures {{ background: var(--disclosures); }}
   .b-fec {{ background: var(--fec); }}
+  .b-budgets {{ background: var(--budgets); }}
   .warn {{
     margin: 0 0 30px; padding: 13px 15px; max-width: 68ch;
     border: 1px solid var(--border); border-radius: 4px;
@@ -509,6 +588,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
   .pill-lobbying.active {{ background: var(--lobbying); border-color: var(--lobbying); color: #fff; }}
   .pill-disclosures.active {{ background: var(--disclosures); border-color: var(--disclosures); color: #fff; }}
   .pill-fec.active {{ background: var(--fec); border-color: var(--fec); color: #fff; }}
+  .pill-budgets.active {{ background: var(--budgets); border-color: var(--budgets); color: #fff; }}
   #count {{ color: var(--muted); font-size: 12.5px; max-width: 1180px; margin: 10px auto 4px; padding: 0 20px; }}
   .layout {{
     max-width: 1180px; margin: 0 auto; padding: 0 20px 60px;
@@ -614,6 +694,12 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
     color: var(--muted); font-size: 13px;
   }}
   footer p {{ max-width: 68ch; margin: 0 0 8px; }}
+  /* Statewide General Fund Receipts, 2026-09-16 -- not tied to any entity, so
+     it lives as its own section rather than in the dossier panel; see
+     docs/SCHEMA.md's "Self-published (inline)" section. */
+  .gfr {{ max-width: 1180px; margin: 20px auto 0; padding: 0 20px 30px; border-top: 1px solid var(--border); }}
+  .gfr h2 {{ font: 600 20px/1.3 var(--serif); margin: 26px 0 6px; }}
+  .gfr .sub {{ color: var(--muted); font-size: 13.5px; max-width: 68ch; margin: 0 0 14px; }}
 </style>
 </head>
 <body>
@@ -664,6 +750,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
     <button class="pill pill-lobbying" data-f="lobbying">Lobbying</button>
     <button class="pill pill-disclosures" data-f="disclosures">Disclosures</button>
     <button class="pill pill-fec" data-f="fec">FEC</button>
+    <button class="pill pill-budgets" data-f="budgets">Budgets</button>
   </div>
 </div>
 <p id="count"></p>
@@ -673,6 +760,18 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
   <aside class="dossier" id="dossier"></aside>
 </div>
 <div class="dossier-scrim" id="scrim"></div>
+
+<section class="gfr">
+  <h2>Nebraska General Fund Receipts</h2>
+  <p class="sub">Statewide monthly tax receipts, actual vs. forecast — not tied to any
+  entity above. Collected by <a href="https://github.com/mattwaite/nebraska-budget-data">Matt
+  Waite</a>'s <a href="https://github.com/mattwaite/nebraska-general-fund-receipts">general
+  fund receipts archive</a>, extracted from the Department of Revenue's own monthly release
+  PDFs. Each month shown is that month's most recently reported figure — the state
+  sometimes revises a prior month's actual or forecast without saying so in the release
+  narrative; the archive linked above keeps every earlier release's figures too.</p>
+  <div id="gfr-table"></div>
+</section>
 
 <footer>
   <p><strong>Read before quoting.</strong> Contract figures are award values
@@ -693,6 +792,16 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
   with an unrelated local one. Rows marked <span class="badge b-hard">ID</span>
   were joined by a source's own identifier rather than by name similarity, which
   is a stronger claim than the rest.</p>
+  <p>Local-government budget figures are what each subdivision filed with the
+  State Auditor for that fiscal year &mdash; a governing board's budget request,
+  not certified audited actual spending. The dollar figure shown for an entity
+  is its <strong>most recent fiscal year's property tax request only</strong>,
+  not summed across the years on file &mdash; unlike a one-time contract award,
+  an annual tax request recurs every year, and summing it would overstate the
+  total by an order of magnitude. Full multi-year history is in that entity's
+  itemized budget table. Collected from
+  <a href="https://github.com/mattwaite/nebraska-budget-data">a professor's own
+  bulk downloader</a>, not scraped by this project.</p>
   <p>No analytics, no tracking, no external fonts, and nothing loads from a third
   party — searching a name here does not send it anywhere.</p>
   <p>Built {date.today().isoformat()} from <code>data/canonical_entities.csv</code>.
@@ -703,7 +812,12 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
 <script>
 const ENTITIES = {payload};          // cross-source, inline, shown by default
 const TOTAL_INDEXED = {total_indexed};
-const BITS = {{contracts: 1, campaign_finance: 2, lobbying: 4, disclosures: 32, fec: 16}};
+// Statewide, not entity-level -- inlined rather than fetched since there's no
+// live site to fetch from and the section is visible on initial load, not
+// gated behind a click. One row per calendar month, latest release only --
+// see export_budget.py's latest_gfr_by_month().
+const GFR = {json.dumps(gfr_rows, separators=(",", ":"))};
+const BITS = {{contracts: 1, campaign_finance: 2, lobbying: 4, disclosures: 32, fec: 16, budgets: 64}};
 let ALL = null;                      // the other ~78,000, fetched on first search
 let loading = false;
 const LABELS = {json.dumps(SOURCE_LABELS)};
@@ -729,6 +843,9 @@ const SOURCE_LINK = {{
   // committee/candidate id, which lazily-loaded rows don't currently carry.
   // Falls back to PROJECTS.fec (fec.gov/data/).
   fec: () => '',
+  // No per-name search on the professor's repo either -- falls back to
+  // PROJECTS.budgets (the repo's own home page).
+  budgets: () => '',
 }};
 
 // Contract totals run past a billion -- Hawkins Construction alone is $1.28B
@@ -790,6 +907,15 @@ function figures(e) {{
     if (s === 'disclosures') {{
       return '<div class="fig">' + t.records.toLocaleString() +
         '<span>' + LABELS[s] + ' · items disclosed · self-reported</span></div>';
+    }}
+    // Budgets: t.amount is a SNAPSHOT (the most recent fiscal year's
+    // property tax request), never a sum across years -- unlike every other
+    // source's figure here, which is a real cumulative total. Says so
+    // explicitly rather than reading like one more cumulative total.
+    if (s === 'budgets') {{
+      return '<div class="fig">' + money(t.amount) + '<span>' + LABELS[s] +
+        ' · FY ' + (e.budget_fiscal_year || '?') + ' property tax request · ' +
+        t.records.toLocaleString() + ' years on file · recurring figure, not summed</span></div>';
     }}
     // FEC: committees and candidates only today, no dollar figure at all --
     // individual itemized contributions (the actual money) aren't loaded
@@ -909,6 +1035,9 @@ function openDossier(idx) {{
     if (s === 'fec' && RETRIEVED.fec_note) {{
       line += '<div class="alias">' + esc(RETRIEVED.fec_note) + '</div>';
     }}
+    if (s === 'budgets' && RETRIEVED.budgets_note) {{
+      line += '<div class="alias">' + esc(RETRIEVED.budgets_note) + '</div>';
+    }}
     return line;
   }}).join('');
 
@@ -946,6 +1075,8 @@ function openDossier(idx) {{
     ? '<div class="txns-slot disc-slot"></div>' : '';
   const contractsSlot = e.sources.includes('contracts')
     ? '<div class="txns-slot contracts-slot"></div>' : '';
+  const budgetSlot = e.sources.includes('budgets')
+    ? '<div class="txns-slot budget-slot"></div>' : '';
 
   dossier.innerHTML =
     '<button class="dossier-close" type="button" aria-label="Close">&times;</button>' +
@@ -963,7 +1094,7 @@ function openDossier(idx) {{
     // CSV export is fine. A 'download all 240,000 contributors' button is
     // not.") -- never add a site-wide or filtered-list export button.
     '<button class="dl-btn" type="button">Download this entity as CSV</button>' +
-    txnsSlot + spendSlot + posSlot + discSlot + contractsSlot +
+    txnsSlot + spendSlot + posSlot + discSlot + contractsSlot + budgetSlot +
     '</div>';
   dossier.classList.add('show');
   document.body.classList.add('dossier-open');
@@ -1005,6 +1136,14 @@ function openDossier(idx) {{
       contractsSlotEl.innerHTML = renderContractRows(txns);
     }}).catch(() => {{ contractsSlotEl.textContent = 'Could not load contracts.'; }});
   }}
+
+  if (e.sources.includes('budgets')) {{
+    const budgetSlotEl = dossier.querySelector('.budget-slot');
+    budgetSlotEl.textContent = 'Loading budget history…';
+    loadBudgetRows().then(rowsData => {{
+      budgetSlotEl.innerHTML = renderBudgetRows(budgetRows(e, rowsData));
+    }}).catch(() => {{ budgetSlotEl.textContent = 'Could not load budget history.'; }});
+  }}
 }}
 
 // The lazily-fetched index is {{columns, rows}}; widen each row, by column
@@ -1020,6 +1159,7 @@ function widen(row) {{
   if (bits & BITS.lobbying) sources.push('lobbying');
   if (bits & BITS.disclosures) sources.push('disclosures');
   if (bits & BITS.fec) sources.push('fec');
+  if (bits & BITS.budgets) sources.push('budgets');
   const totals = {{}};
   const contribEras = {{}};
   if (bits & BITS.contracts) {{
@@ -1045,6 +1185,11 @@ function widen(row) {{
   if (bits & BITS.fec) {{
     totals.fec = {{records: row[COL.fec_recs], amount: 0}};
   }}
+  let budgetFiscalYear = '';
+  if (bits & BITS.budgets) {{
+    totals.budgets = {{records: row[COL.budget_recs], amount: row[COL.budget_amt]}};
+    budgetFiscalYear = row[COL.budget_fy] || '';
+  }}
   const name = row[COL.name];
   const lobbyId = row[COL.lobby_id];
   const disclosureIds = row[COL.disclosure_ids] || [];
@@ -1054,6 +1199,7 @@ function widen(row) {{
   return {{
     name, sources, totals, contrib_eras: contribEras, aliases, match: null,
     hard_id: false, lite: true, lobby_id: lobbyId, disclosure_ids: disclosureIds,
+    budget_fiscal_year: budgetFiscalYear,
     links: Object.fromEntries(sources.map(s => [s, SOURCE_LINK[s](name, lobbyId)])),
   }};
 }}
@@ -1334,6 +1480,49 @@ function renderContractRows(txns) {{
   );
 }}
 
+// Own-origin, not cross-repo -- d/budget_rows.json is this project's own
+// self-published artifact (see docs/SCHEMA.md's "Self-published" section,
+// and export_budget.py), not a cross-fetch from another repo's live site:
+// there is no live site on the other end to fetch from (nebraska-budget-data
+// belongs to a third party). Fetched once and cached, same lazy pattern as
+// every other itemized source.
+let BUDGET_ROWS = null;
+function loadBudgetRows() {{
+  if (BUDGET_ROWS) return Promise.resolve(BUDGET_ROWS);
+  return fetch('d/budget_rows.json').then(r => r.json())
+    .then(j => {{ BUDGET_ROWS = j; return j; }});
+}}
+
+// Same alias-guessing as campaignFinanceTxns -- kept for consistency even
+// though this file is ne-connect's own (no cross-repo spelling drift to
+// guess around today), so a future divergence costs nothing to catch.
+function budgetRows(e, rowsData) {{
+  const keys = new Set([e.name, ...e.aliases.map(a => a.name)]);
+  const rows = [];
+  keys.forEach(k => {{ (rowsData[k] || []).forEach(r => rows.push(r)); }});
+  return rows;
+}}
+
+function renderBudgetRows(rows) {{
+  return itemizedBlock(
+    'Itemized budget history',
+    ['Fiscal Year', 'Property Tax', 'Valuation', 'Outstanding Debt',
+     'Resources Available', 'Disbursements', 'Unused Authority', 'Report'],
+    rows,
+    r => {{
+      const [fy, propTax, valuation, debt, resources, disbursements, unusedAuth, reportLink] = r;
+      const report = reportLink
+        ? '<a href="' + esc(reportLink) + '" target="_blank" rel="noopener">filing</a>'
+        : '';
+      return '<tr><td>' + esc(fy) + '</td><td class="n">' + cfMoney(propTax) + '</td>' +
+        '<td class="n">' + cfMoney(valuation) + '</td><td class="n">' + cfMoney(debt) + '</td>' +
+        '<td class="n">' + cfMoney(resources) + '</td><td class="n">' + cfMoney(disbursements) + '</td>' +
+        '<td>' + esc(unusedAuth) + '</td><td>' + report + '</td></tr>';
+    }},
+    'Filter by fiscal year…'
+  );
+}}
+
 // Per-entity export only -- see the PRIVACY comment at the button's markup.
 // One flat CSV, a record_type column distinguishing rows shaped differently
 // (a summary line, a name variant, an itemized transaction, a lobbying
@@ -1343,7 +1532,8 @@ const CSV_HEADER = [
   'entity', 'record_type', 'source', 'date', 'amount', 'records', 'recipient',
   'city_state', 'description', 'era', 'legislature', 'bill', 'position',
   'lobbyist', 'item_type', 'ocr', 'document_number', 'end_date', 'status',
-  'note',
+  'note', 'fiscal_year', 'valuation', 'outstanding_debt', 'resources_available',
+  'disbursements', 'unused_authority',
 ];
 
 function csvCell(v) {{
@@ -1357,7 +1547,7 @@ function csvCell(v) {{
   return /["\\n,]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }}
 
-function entityToCSVRows(e, cfTxns, spending, positions, discItems, contractTxns) {{
+function entityToCSVRows(e, cfTxns, spending, positions, discItems, contractTxns, budgetTxns) {{
   const rows = [CSV_HEADER];
   const push = obj => rows.push(CSV_HEADER.map(col => obj[col] ?? ''));
 
@@ -1377,9 +1567,11 @@ function entityToCSVRows(e, cfTxns, spending, positions, discItems, contractTxns
     push({{
       entity: e.name, record_type: 'summary', source: s,
       amount: t.amount || '', records: t.records,
+      fiscal_year: s === 'budgets' ? e.budget_fiscal_year : '',
       note: s === 'disclosures' ? 'items disclosed, self-reported'
         : s === 'lobbying' ? 'self-reported'
-        : s === 'fec' ? 'FEC.gov record, committees/candidates only' : '',
+        : s === 'fec' ? 'FEC.gov record, committees/candidates only'
+        : s === 'budgets' ? 'most recent fiscal year only, not summed across years' : '',
     }});
   }});
 
@@ -1437,6 +1629,16 @@ function entityToCSVRows(e, cfTxns, spending, positions, discItems, contractTxns
     }});
   }});
 
+  (budgetTxns || []).forEach(r => {{
+    const [fy, propTax, valuation, debt, resources, disbursements, unusedAuth, reportLink] = r;
+    push({{
+      entity: e.name, record_type: 'budget_row', source: 'budgets',
+      amount: propTax, fiscal_year: fy, valuation, outstanding_debt: debt,
+      resources_available: resources, disbursements, unused_authority: unusedAuth,
+      note: reportLink,
+    }});
+  }});
+
   return rows;
 }}
 
@@ -1478,6 +1680,7 @@ dossier.addEventListener('click', ev => {{
   const wantsPos = e.sources.includes('lobbying') && e.lobby_id;
   const wantsDisc = e.sources.includes('disclosures') && e.disclosure_ids && e.disclosure_ids.length;
   const wantsContracts = e.sources.includes('contracts');
+  const wantsBudget = e.sources.includes('budgets');
   dlBtn.disabled = true;
   dlBtn.textContent = 'Preparing…';
   Promise.all([
@@ -1486,15 +1689,17 @@ dossier.addEventListener('click', ev => {{
     wantsPos ? loadLobbyingPositions() : Promise.resolve(null),
     wantsDisc ? loadDisclosureItems() : Promise.resolve(null),
     wantsContracts ? loadContractRows(e) : Promise.resolve(null),
-  ]).then(([rowsData, expendData, positionsData, itemsData, contractTxns]) => {{
+    wantsBudget ? loadBudgetRows() : Promise.resolve(null),
+  ]).then(([rowsData, expendData, positionsData, itemsData, contractTxns, budgetData]) => {{
     const cfTxns = rowsData ? campaignFinanceTxns(e, rowsData) : [];
     const spending = expendData ? campaignExpenditures(e, expendData) : [];
     const positions = positionsData ? (positionsData[e.lobby_id] || []) : [];
     const items = itemsData ? disclosureItems(e, itemsData) : [];
+    const budgetTxns = budgetData ? budgetRows(e, budgetData) : [];
     downloadCSV(slugify(e.name) + '.csv',
-      entityToCSVRows(e, cfTxns, spending, positions, items, contractTxns || []));
+      entityToCSVRows(e, cfTxns, spending, positions, items, contractTxns || [], budgetTxns));
   }}).catch(() => {{
-    downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, [], [], [], [], []));
+    downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, [], [], [], [], [], []));
   }}).finally(() => {{
     dlBtn.disabled = false;
     dlBtn.textContent = 'Download this entity as CSV';
@@ -1526,6 +1731,40 @@ pills.addEventListener('click', ev => {{
 }});
 q.addEventListener('input', apply);
 apply();
+
+// GFR: statewide, not entity-level, always visible -- rendered once on load,
+// not lazily on click like every itemized source above.
+function renderGfrTable() {{
+  const el = document.getElementById('gfr-table');
+  if (!el) return;
+  el.innerHTML = itemizedBlock(
+    'Monthly receipts, most recent release per month',
+    ['Fiscal Year', 'Month', 'Actual', 'Projected', 'Cumulative Actual', 'Cumulative Projected'],
+    GFR,
+    r => {{
+      const [fy, dataYear, monthName, actual, projected, cumActual, cumProjected] = r;
+      const over = actual - projected;
+      const cls = over >= 0 ? 'pos-s' : 'pos-o';
+      return '<tr><td>' + esc(fy) + '</td><td>' + esc(monthName) + ' ' + dataYear + '</td>' +
+        '<td class="n ' + cls + '">' + cfMoney(actual) + '</td><td class="n">' + cfMoney(projected) +
+        '</td><td class="n">' + cfMoney(cumActual) + '</td><td class="n">' + cfMoney(cumProjected) + '</td></tr>';
+    }},
+    'Filter by fiscal year or month…'
+  );
+}}
+document.getElementById('gfr-table').addEventListener('input', ev => {{
+  const inp = ev.target.closest('.txn-filter');
+  if (!inp) return;
+  const term = inp.value.trim().toLowerCase();
+  const scroll = inp.nextElementSibling;
+  const table = scroll && scroll.querySelector('table');
+  if (!table) return;
+  [...table.rows].forEach((tr, i) => {{
+    if (i === 0) return;
+    tr.hidden = !!term && !tr.textContent.toLowerCase().includes(term);
+  }});
+}});
+renderGfrTable();
 </script>
 </body>
 </html>
@@ -1543,15 +1782,26 @@ def main() -> int:
     index_payload = {"columns": INDEX_COLUMNS, "rows": full}
     INDEX_PATH.write_text(json.dumps(index_payload, separators=(",", ":")), encoding="utf-8")
 
+    # Self-published, not cross-fetched -- see export_budget.py's module
+    # docstring and docs/SCHEMA.md's "Self-published" sections. The itemized
+    # budget history is a separate lazily-fetched file (its own dossier
+    # slot); the GFR series is inlined directly into the page below (see
+    # latest_gfr_by_month()'s docstring for why).
+    budget_bytes = write_budget_rows_json()
+    write_general_fund_receipts_json()
+    gfr_rows = latest_gfr_by_month()
+
     summary_path = DATA_DIR / "entities_summary.json"
     summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
-    html = render(entities, summary, lobbying_coverage(), retrieval_dates(), len(full))
+    html = render(entities, summary, lobbying_coverage(), retrieval_dates(), len(full), gfr_rows)
     OUT_PATH.write_text(html, encoding="utf-8")
 
     print(f"  searchable entities {len(full):>8,}  -> d/{INDEX_PATH.name}"
           f" ({INDEX_PATH.stat().st_size / 1024 / 1024:.2f} MB)")
     print(f"  inline, cross-source{len(entities):>8,}")
     print(f"  in all three        {sum(1 for e in entities if len(e['sources']) == 3):>8,}")
+    print(f"  budget rows         {budget_bytes / 1024 / 1024:>8.2f} MB  -> d/budget_rows.json")
+    print(f"  gfr months (inline) {len(gfr_rows):>8,}")
     print(f"  page size           {len(html.encode('utf-8')) / 1024:>8.0f} KB")
     print(f"  -> {OUT_PATH.name}")
     return 0
