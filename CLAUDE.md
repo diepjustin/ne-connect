@@ -49,8 +49,6 @@ them all directly under the same parent directory as this one:
 ne-contracts/           state contracts scraper, its own repo
 ne-campaign-finance/    NADC scraper, its own repo
 ne-lobbying/            Legislature lobbying scraper, its own repo
-nebraska-budget-data/           third party's repo (not ours) -- local budget filings
-nebraska-general-fund-receipts/ third party's repo (not ours) -- statewide revenue
 ne-connect/             this repo -- the hub, read-only over the above
   ingest/     sources.py -- thin adapters, each sibling's processed CSVs -> a
               common Party shape. Reads local, gitignored data from the
@@ -61,19 +59,10 @@ ne-connect/             this repo -- the hub, read-only over the above
               human decision ledger)
   build/      build_entities.py (the resolution pipeline -> canonical_entities.csv)
               build_site.py (index.html + d/entities.json)
-              export_budget.py (d/budget_rows.json, d/gfr.json -- see below)
   data/       rebuilt from the pipeline; only data/manual/ is version-controlled
   index.html  the published page, at the repo root because that's the served path
   d/          the lazily-fetched full search index
 ```
-
-`nebraska-budget-data`/`nebraska-general-fund-receipts` are read-only in a
-stronger sense than the rest: they belong to a third party (the professor
-whose course this project grew out of), so this repo clones them but never
-pushes to or forks them. They have no live site to cross-fetch itemized
-data from the way the other three sources' own sites are cross-fetched at
-runtime, so `build/export_budget.py` publishes that itemized data itself
-instead — see `docs/SCHEMA.md`'s "Self-published" sections.
 
 Runtime: each sibling scrapes on its own GitHub Actions cadence and publishes its
 processed CSVs (`ne-*-daily.yml` / weekly, per `PLAN.md` Phase 4). This repo's own

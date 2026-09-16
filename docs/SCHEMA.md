@@ -20,14 +20,13 @@ spanning three spellings in two sources is several rows sharing `entity_id`.
 | `canonical_name` | display name chosen for the whole cluster |
 | `alias` | the raw name as this source published it |
 | `normalized_key` | `resolve/normalize.py` output for `alias` |
-| `source` | `contracts`, `campaign_finance`, `lobbying`, `disclosures`, `fec`, or `budgets` |
-| `era` | `modern` (2022+) or `pre2022` (Phase 1.2's legacy tables) — only `campaign_finance` has more than one today; every other source's rows are `modern` |
-| `role` | vendor, contributor, principal, subdivision, etc. — source-specific |
+| `source` | `contracts`, `campaign_finance`, `lobbying`, `disclosures`, or `fec` |
+| `era` | `modern` (2022+) or `pre2022` (Phase 1.2's legacy tables) — only `campaign_finance` has more than one today; every other source's rows are `modern`. One row per (alias, source, era): a donor active in both eras gets two rows, never summed together |
+| `role` | vendor, contributor, principal, etc. — source-specific |
 | `entity_type` | `organization` or `individual` |
-| `records` | row count behind this alias in its source — for `budgets`, years of budget history on file, not itemized transactions |
-| `amount` | dollar total behind this alias in its source — for every source except `budgets` this is a real cumulative sum. For `budgets` it is a SNAPSHOT: the most recent fiscal year's property tax request only, never summed across years (an annual recurring figure, unlike a one-time contract award — see `fiscal_year` below and "Self-published: nebraska-budget-data") |
+| `records` | row count behind this alias in its source |
+| `amount` | dollar total behind this alias in its source |
 | `source_id` | the source's own identifier, where it publishes one (lobbying only, today) |
-| `fiscal_year` | which fiscal year `amount` is "as of" (e.g. `"2025-2026"`) — populated only for `budgets` rows, empty for every other source |
 | `source_url` | link to the primary record, or a search page where no per-record URL exists |
 
 ## `data/hard_id_links.csv`, `data/match_candidates.csv`, `data/review_queue.csv`
@@ -73,11 +72,11 @@ existing reader having to change:
 
 `name, bits, contract_amt, contract_recs, contrib_amt, contrib_recs,
 lobby_recs, lobby_id, aliases, contrib_amt_legacy, contrib_recs_legacy,
-disclosure_recs, fec_recs, disclosure_ids, budget_amt, budget_recs, budget_fy`
+disclosure_recs, fec_recs`
 
 `bits` is a source bitmask (`contracts=1, campaign_finance=2, lobbying=4,
-disclosures=32, fec=16, budgets=64` — 8 is reserved for SoS, Phase 2, blocked;
-see `SOURCE_BITS` in `build_site.py`). `aliases` lists the entity's *other*
+disclosures=32, fec=16` — 8 is reserved for SoS, Phase 2, blocked; see
+`SOURCE_BITS` in `build_site.py`). `aliases` lists the entity's *other*
 spellings, empty when there's only the one. `lobby_id` is the lobbying
 source's principal id, empty when lobbying isn't one of the entity's
 sources. `contrib_amt`/`contrib_recs` are modern (2022+) campaign-finance
@@ -91,10 +90,6 @@ committee's or candidate's own record count; there is no `fec_amt` yet —
 dollar figure) has not been pulled, so a dollar column would misleadingly
 assert "checked, found nothing" rather than "not loaded". See
 `retrieval_dates()`'s `fec_note` for how the page states that gap.
-`budget_amt`/`budget_recs`/`budget_fy` are a local-government subdivision's
-most recent fiscal year's property tax request, years of budget history on
-file, and which fiscal year that is (e.g. `"2025-2026"`) — see "Self-published:
-nebraska-budget-data" below for why `budget_amt` is a snapshot, not a sum.
 
 ## `index.html`'s inline payload
 
@@ -346,104 +341,6 @@ begin_date, end_date, status, detail_url]`, keyed by the exact raw
 "Vendor" string -- the same key `ingest/sources.py load_contract_vendors()`
 already uses, so the alias-guessing lookup is identical to campaign
 finance's.
-
-## Self-published: `nebraska-budget-data`
-
-Added 2026-09-16, the fifth source and the first that is NOT this project's
-own sibling repo — `mattwaite/nebraska-budget-data` belongs to a third party
-(the professor whose course this project grew out of), MIT-licensed, cloned
-read-only the same way as every other sibling but never pushed to, never
-forked, no CI added there. It has no live site of its own, so the "cross-fetch
-from the source's own already-published `d/*.json`" pattern the four sections
-above use is not possible here — there is nothing to fetch from. Instead
-ne-connect's own build publishes the itemized data itself: `build/export_budget.py`'s
-`write_budget_rows_json()` reads `ingest/sources.py load_budget_rows()` and
-writes `d/budget_rows.json`, a real artifact this project owns and commits
-directly (12.5 MB raw CSV in, well under GitHub's 100 MB limit — no sharding
-needed, unlike `ne-contracts`).
-
-**Entity identity, the real risk here.** `nebraska_budgets_all.csv` is
-63,934 rows, one per (subdivision, fiscal year), 1999–2026 — `county_name,
-subdivision_type, subdivision_name, fiscal_year, report_link,
-property_tax_bonds, property_tax_other, total_property_tax, valuation,
-outstanding_debt_principal, outstanding_debt_interest, outstanding_debt_total,
-total_resources_available, total_disbursements, unused_budget_authority`.
-`subdivision_name` alone is not a safe key: two real, different bodies can
-share a name across counties (confirmed against the live file — exactly two:
-`"Emerson Hubbard Public Schools"` in both Dixon and Thurston County,
-`"Wakefield CRA"` in both Dixon and Wayne County). `ingest/sources.py`'s
-`load_budget_subdivisions()`/`load_budget_rows()` group by
-`(county_name, subdivision_type, subdivision_name)` — the CSV's real grain —
-and `_budget_display_name()` appends `" (<county_name>)"` only to a name that
-actually collides, keeping every other subdivision's display name clean for
-cross-source matching. Separately, the Auditor's own classification relabeled
-`"Municipalities"` to `"Cities and Villages"` at some point around
-FY2010-2011/2011-2012 (confirmed empirically: every affected `(county, name)`
-pair has non-overlapping fiscal-year ranges under the two labels, never both
-in the same year) — `_BUDGET_TYPE_RELABEL` merges these into one subdivision
-before grouping, or 530 of Nebraska's cities/villages would each split into
-two `Party` objects with a truncated history apiece.
-
-**`Party.total_amount` is a snapshot, not a sum — the one real difference
-from every other source's `Party`.** A property tax request is an annual
-recurring figure; summing up to 27 years of them (some subdivisions have that
-much history) would overstate the total by an order of magnitude, unlike a
-one-time contract award. `Party.fiscal_year` names which year `total_amount`
-is "as of"; `Party.record_count` is years of history on file, not itemized
-transactions. This threads through `canonical_entities.csv`'s new
-`fiscal_year` column, `build_site.py build_entities()`'s `totals["budgets"]`
-(kept as the LATEST member's figure even in the rare case of more than one
-budgets member for one entity, never summed), and the lazy index's
-`budget_amt`/`budget_recs`/`budget_fy` columns.
-
-**Cross-referencing coverage.** `resolve/aliases.yml` gets a small, curated
-set of entries for the state's largest cities (Omaha, Lincoln, Grand Island,
-Kearney, Fremont, Hastings, Norfolk, Bellevue, North Platte, Columbus) —
-`nebraska-budget-data`'s own `subdivision_name` is bare (`"Lincoln"`) while
-contracts/lobbying already use `"City of Lincoln"`, and `normalize.py` does
-not reorder tokens, so the two would otherwise only meet via scoring, which
-common tokens like `CITY` are unlikely to clear the auto-accept weight floor
-for once ~3,240 subdivision names are in the corpus. Counties need no
-entries: a county's own `subdivision_name` already IS `"<Name> County"` — the
-exact spelling contracts/lobbying already use.
-
-Row shape (`d/budget_rows.json`, `{display_name: [[row], ...]}`, same
-`{name: [[...]]}` convention as `d/rows.json`/`d/positions.json`):
-`[fiscal_year, total_property_tax, valuation, outstanding_debt_total,
-total_resources_available, total_disbursements, unused_budget_authority,
-report_link]`, sorted newest fiscal year first. `unused_budget_authority` is
-kept as the source's raw string (often literally `"N/A"` for school districts
-and some other subdivision types) rather than coerced to `0` — "not
-applicable" and "zero" are different claims (CLAUDE.md rule 1).
-
-## Self-published (inline): `nebraska-general-fund-receipts`
-
-Also added 2026-09-16, also `mattwaite`'s (not this project's own), same
-read-only-clone-no-fork approach as budget data above. **Not an entity
-source** — one single statewide monthly series (actual vs. projected General
-Fund tax receipts, Aug 2016–present), never tied to any subdivision or
-organization, so it never touches `SOURCE_BITS`, `canonical_entities.csv`, or
-the resolution pipeline at all. `ingest/sources.py load_general_fund_receipts()`
-is a thin, undecimated pass-through of the source CSV's own `(release,
-fiscal-month)` grain — every release's figure for every month it re-reports,
-since the source repo's own README explains that's what lets a reader track
-revisions to a month's figures over time. `build/export_budget.py`
-`write_general_fund_receipts_json()` writes the full history to `d/gfr.json`
-as a documented, directly-linkable raw artifact, but the page itself does NOT
-fetch it at runtime — `latest_gfr_by_month()` collapses it to one row per
-calendar month (the most recent release's figure, the final, most-corrected
-value on record) and `build_site.py` inlines that directly into the page as a
-`const GFR = [...]` payload, the same pattern as `ENTITIES`, since the section
-is meant to be visible on initial load, not gated behind a per-entity click
-like every itemized table above.
-
-Row shape (inlined `GFR`, collapsed): `[fiscal_year, data_year,
-data_month_name, actual_net_receipts, projected_net_receipts,
-cumulative_actual_net_receipts, cumulative_projected_net_receipts]`. Row
-shape (`d/gfr.json`, full, uncollapsed): `[release_year, release_month,
-fiscal_year, data_year, data_month, data_month_name, actual_net_receipts,
-projected_net_receipts, cumulative_actual_net_receipts,
-cumulative_projected_net_receipts]`.
 
 ## Dedup contract, by source
 

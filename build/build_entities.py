@@ -35,7 +35,6 @@ from match import match_pair  # noqa: E402
 from normalize import normalize_org  # noqa: E402
 from resolutions import Ledger, UnionFind  # noqa: E402
 from sources import (  # noqa: E402
-    load_budget_subdivisions,
     load_campaign_filers,
     load_contract_vendors,
     load_contributors,
@@ -134,28 +133,19 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
     fec = _keyed({
         **load_fec_committees(), **load_fec_candidates(), **load_fec_contributors()
     })
-    # Local-government subdivisions -- see sources.py's load_budget_subdivisions()
-    # docstring. entity_type="organization" always, so these are automatically
-    # eligible for the org-only auto-accept band below with no further changes
-    # needed to match.py's involves_person guard.
-    budgets = _keyed(load_budget_subdivisions())
 
     # IDF is computed over ALL sources, so a token's rarity reflects the whole
     # corpus rather than whichever list happens to be largest.
     index = TokenIndex(
-        list(vendors) + list(contributors) + list(lobbying) + list(disclosures)
-        + list(fec) + list(budgets)
+        list(vendors) + list(contributors) + list(lobbying) + list(disclosures) + list(fec)
     )
 
     # Everything the authority pass can see. Contracts and campaign finance
     # publish no entity id, so in practice only lobbying, disclosures and fec
     # contribute here -- but the pass is source-agnostic and will pick up any
-    # source that does. Budgets has no source-native id either (the Auditor's
-    # CGI form publishes none), so it contributes nothing to this pass today,
-    # same as vendors/contributors -- included anyway so a future id source
-    # never needs this loop touched again.
+    # source that does.
     all_parties = {}
-    for keyed in (vendors, contributors, lobbying, disclosures, fec, budgets):
+    for keyed in (vendors, contributors, lobbying, disclosures, fec):
         for key, parties in keyed.items():
             all_parties.setdefault(key, []).extend(parties)
 
@@ -188,15 +178,6 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
         ("campaign_finance", contributors, "fec", fec),
         ("lobbying", lobbying, "fec", fec),
         ("disclosures", disclosures, "fec", fec),
-        # Local-government subdivisions against the three sources a government
-        # body could plausibly also appear in as itself (a county paying its
-        # own contractors, a city PAC, a district's own lobbyist). Not paired
-        # against disclosures (individual filers -- can never auto-accept per
-        # the person guard, pure scoring cost for no benefit) or fec (no
-        # natural counterpart for a Nebraska local subdivision).
-        ("contracts", vendors, "budgets", budgets),
-        ("campaign_finance", contributors, "budgets", budgets),
-        ("lobbying", lobbying, "budgets", budgets),
     )
     for left_source, left_keyed, right_source, right_keyed in pairings:
         for left, right in candidate_pairs(left_keyed, right_keyed, index):
@@ -251,7 +232,7 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
     clustered = {member for members in clusters.groups().values() for member in members}
     singletons = {
         key
-        for keyed in (vendors, contributors, lobbying, disclosures, fec, budgets)
+        for keyed in (vendors, contributors, lobbying, disclosures, fec)
         for key in keyed
         if key not in clustered
     }
@@ -260,9 +241,7 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
 
     entities = []
     for root, members in sorted(groups.items()):
-        display_name = _canonical_name(
-            members, vendors, contributors, lobbying, disclosures, fec, budgets
-        )
+        display_name = _canonical_name(members, vendors, contributors, lobbying, disclosures, fec)
         for member in sorted(members):
             for source, keyed in (
                 ("contracts", vendors),
@@ -270,7 +249,6 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
                 ("lobbying", lobbying),
                 ("disclosures", disclosures),
                 ("fec", fec),
-                ("budgets", budgets),
             ):
                 for party in keyed.get(member, []):
                     entities.append(
@@ -286,10 +264,6 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
                             "records": party.record_count,
                             "amount": round(party.total_amount, 2),
                             "source_id": party.source_id,
-                            # Only budgets rows carry this -- the fiscal year
-                            # `amount` is "as of" (see sources.py's Party.fiscal_year
-                            # docstring). Empty string for every other source.
-                            "fiscal_year": party.fiscal_year,
                             # UI_SPEC: every displayed fact links to its primary
                             # record. Contracts and lobbying publish a per-record
                             # URL; campaign finance has none for a contributor,
@@ -323,7 +297,6 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
         "lobbying_principals": len(lobbying_principals),
         "disclosure_filer_keys": len(disclosures),
         "fec_keys": len(fec),
-        "budget_subdivision_keys": len(budgets),
         "hard_id_links": len(hard_links),
         "entities_in_two_or_more_sources": multi_source,
         "candidates_scored": len(matches),
