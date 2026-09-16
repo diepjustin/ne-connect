@@ -533,6 +533,12 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
   .pos-s {{ color: var(--support); }}
   .pos-o {{ color: var(--oppose); }}
   .pos-x {{ color: var(--neutral); }}
+  .dl-btn {{
+    margin-top: 14px; font: 500 12.5px/1 inherit; padding: 7px 12px;
+    border: 1px solid var(--border); border-radius: 4px; background: var(--panel);
+    color: var(--text); cursor: pointer;
+  }}
+  .dl-btn:hover {{ border-color: var(--accent); color: var(--accent); }}
   .hint {{ color: var(--muted); font-size: 13px; padding: 14px 4px; }}
   footer {{
     max-width: 900px; margin: 0 auto; padding: 20px; border-top: 1px solid var(--border);
@@ -817,6 +823,10 @@ function render(rows, pool) {{
       '<h4>Name variants folded into this entity</h4>' + aliases +
       '<h4>Where each figure comes from</h4>' + prov +
       txnsSlot + posSlot +
+      // PRIVACY: per-entity export only, per docs/PRIVACY.md rule 4 ("Per-search
+      // CSV export is fine. A 'download all 240,000 contributors' button is
+      // not.") -- never add a site-wide or filtered-list export button.
+      '<button class="dl-btn" type="button">Download this entity as CSV</button>' +
       '</div></div>';
   }}).join('');
 }}
@@ -988,7 +998,119 @@ function renderPositionsTable(positions) {{
     rowsHtml + '</table>' + more;
 }}
 
+// Per-entity export only -- see the PRIVACY comment at the button's markup.
+// One flat CSV, a record_type column distinguishing rows shaped differently
+// (a summary line, a name variant, an itemized transaction, a lobbying
+// position) rather than one file per shape: a reporter dragging this into a
+// spreadsheet gets everything about one name in one place.
+const CSV_HEADER = [
+  'entity', 'record_type', 'source', 'date', 'amount', 'records', 'recipient',
+  'city_state', 'description', 'era', 'legislature', 'bill', 'position',
+  'lobbyist', 'note',
+];
+
+function csvCell(v) {{
+  const s = v === null || v === undefined ? '' : String(v);
+  return /["\\n,]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}}
+
+function entityToCSVRows(e, cfTxns, positions) {{
+  const rows = [CSV_HEADER];
+  const push = obj => rows.push(CSV_HEADER.map(col => obj[col] ?? ''));
+
+  ORDER.filter(s => e.totals[s]).forEach(s => {{
+    const eras = s === 'campaign_finance' ? (e.contrib_eras || {{}}) : {{}};
+    if (Object.keys(eras).length > 1) {{
+      Object.keys(eras).sort().forEach(era => {{
+        const t = eras[era];
+        push({{
+          entity: e.name, record_type: 'summary', source: s, amount: t.amount,
+          records: t.records, era, note: 'itemized only',
+        }});
+      }});
+      return;
+    }}
+    const t = e.totals[s];
+    push({{
+      entity: e.name, record_type: 'summary', source: s,
+      amount: t.amount || '', records: t.records,
+      note: s === 'disclosures' ? 'items disclosed, self-reported'
+        : s === 'lobbying' ? 'self-reported'
+        : s === 'fec' ? 'FEC.gov record, committees/candidates only' : '',
+    }});
+  }});
+
+  e.aliases.forEach(a => {{
+    push({{
+      entity: e.name, record_type: 'name_variant', recipient: a.name,
+      note: a.sources.join('|'),
+    }});
+  }});
+
+  (cfTxns || []).forEach(t => {{
+    const [dateStr, amount, filerName, orgId, city, state, desc, included, era] = t;
+    push({{
+      entity: e.name, record_type: 'campaign_finance_transaction',
+      source: 'campaign_finance', date: dateStr, amount, recipient: filerName,
+      city_state: [city, state].filter(Boolean).join(', '), description: desc,
+      era, note: included ? '' : 'excluded from the total (see include_in_total)',
+    }});
+  }});
+
+  (positions || []).forEach(p => {{
+    const [legislature, bill, position, lobbyist] = p;
+    push({{
+      entity: e.name, record_type: 'lobbying_position', source: 'lobbying',
+      legislature, bill, position, lobbyist,
+    }});
+  }});
+
+  return rows;
+}}
+
+function slugify(name) {{
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'entity';
+}}
+
+function downloadCSV(filename, rows) {{
+  const csv = rows.map(r => r.map(csvCell).join(',')).join('\\r\\n');
+  const blob = new Blob([csv], {{type: 'text/csv;charset=utf-8;'}});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}}
+
 list.addEventListener('click', ev => {{
+  const dlBtn = ev.target.closest('.dl-btn');
+  if (dlBtn) {{
+    const row = dlBtn.closest('.entity');
+    const e = row && renderedRows[Number(row.dataset.idx)];
+    if (!e) return;
+    const wantsCf = e.sources.includes('campaign_finance');
+    const wantsPos = e.sources.includes('lobbying') && e.lobby_id;
+    dlBtn.disabled = true;
+    dlBtn.textContent = 'Preparing…';
+    Promise.all([
+      wantsCf ? loadCampaignFinanceRows() : Promise.resolve(null),
+      wantsPos ? loadLobbyingPositions() : Promise.resolve(null),
+    ]).then(([rowsData, positionsData]) => {{
+      const cfTxns = rowsData ? campaignFinanceTxns(e, rowsData) : [];
+      const positions = positionsData ? (positionsData[e.lobby_id] || []) : [];
+      downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, cfTxns, positions));
+    }}).catch(() => {{
+      downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, [], []));
+    }}).finally(() => {{
+      dlBtn.disabled = false;
+      dlBtn.textContent = 'Download this entity as CSV';
+    }});
+    return;
+  }}
+
   const row = ev.target.closest('.entity');
   if (!row) return;
   const opening = !row.classList.contains('open');

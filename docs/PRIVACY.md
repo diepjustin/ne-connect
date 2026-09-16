@@ -32,7 +32,13 @@ address.
    reporting technique, not a public feature. If it's built, it's a local-only tool
    in `pipeline/`, not on the site.
 4. **No bulk export of individual donors.** Per-search CSV export is fine. A
-   "download all 240,000 contributors" button is not.
+   "download all 240,000 contributors" button is not. **Implemented
+   2026-09-15**: each entity's expanded detail carries a "Download this
+   entity as CSV" button (`build_site.py`'s `entityToCSVRows()`), scoped to
+   that one entity only -- its summary figures, name variants, and whatever
+   itemized records are already fetchable (campaign finance, lobbying). No
+   site-wide, filtered-list, or search-results export exists or should be
+   added.
 5. **The co-occurrence panel never links two private individuals to each other.**
    Organization-to-organization and person-to-organization only.
 6. **No inference about anyone.** The tool does not guess employer, party,
