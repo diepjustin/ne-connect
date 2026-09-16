@@ -539,6 +539,20 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
     color: var(--text); cursor: pointer;
   }}
   .dl-btn:hover {{ border-color: var(--accent); color: var(--accent); }}
+  .txn-filter {{
+    display: block; width: 100%; font: inherit; font-size: 13px;
+    padding: 6px 9px; margin: 4px 0 6px; border: 1px solid var(--border);
+    border-radius: 4px; background: var(--panel); color: var(--text);
+  }}
+  .txn-filter:focus {{ outline: 2px solid var(--accent); outline-offset: -1px; }}
+  .txn-scroll {{
+    max-height: 320px; overflow-y: auto; border: 1px solid var(--border);
+    border-radius: 4px;
+  }}
+  .txn-scroll table {{ margin-top: 0; }}
+  .txn-scroll th {{ position: sticky; top: 0; background: var(--bg); }}
+  .txn-scroll tr[hidden] {{ display: none; }}
+  .txn-count {{ color: var(--muted); font-size: 11.5px; margin: 4px 0 0; }}
   .hint {{ color: var(--muted); font-size: 13px; padding: 14px 4px; }}
   footer {{
     max-width: 900px; margin: 0 auto; padding: 20px; border-top: 1px solid var(--border);
@@ -833,11 +847,14 @@ function render(rows, pool) {{
       '<h4>Why these records are grouped</h4>' + conf +
       '<h4>Name variants folded into this entity</h4>' + aliases +
       '<h4>Where each figure comes from</h4>' + prov +
-      txnsSlot + spendSlot + posSlot +
+      // Above the itemized tables on purpose -- those can run to hundreds of
+      // scrollable rows, and the button got lost below them (real feedback:
+      // a reporter scrolled past a long table and never found it).
       // PRIVACY: per-entity export only, per docs/PRIVACY.md rule 4 ("Per-search
       // CSV export is fine. A 'download all 240,000 contributors' button is
       // not.") -- never add a site-wide or filtered-list export button.
       '<button class="dl-btn" type="button">Download this entity as CSV</button>' +
+      txnsSlot + spendSlot + posSlot +
       '</div></div>';
   }}).join('');
 }}
@@ -943,6 +960,29 @@ function loadCampaignFinanceRows() {{
 const ORG_DETAIL_URL = 'https://nadc-e.nebraska.gov/PublicSite/SearchPages/OrganizationDetail.aspx?OrganizationID={{org_id}}';
 const cfMoney = n => '$' + n.toLocaleString(undefined, {{maximumFractionDigits: 0}});
 
+// Shared by every itemized table (contributions, spending, positions): a
+// long flat dump was hard to navigate (real feedback -- hundreds of rows
+// pushed the download button out of sight below them). This caps how many
+// rows ever reach the DOM, but wraps them in a fixed-height, scrollable box
+// with its own text filter (delegated listener below) instead of dumping
+// them into the page's own scroll.
+const ITEMIZED_ROW_CAP = 500;
+function itemizedBlock(heading, headerCells, allRows, rowToHtml, filterPlaceholder) {{
+  if (!allRows.length) return '';
+  const shown = allRows.slice(0, ITEMIZED_ROW_CAP);
+  const theadHtml = '<tr>' + headerCells.map(h => '<th>' + h + '</th>').join('') + '</tr>';
+  const bodyHtml = shown.map(rowToHtml).join('');
+  const capNote = allRows.length > ITEMIZED_ROW_CAP
+    ? '<p class="hint">' + (allRows.length - ITEMIZED_ROW_CAP).toLocaleString() +
+      ' more not shown -- download the CSV for the full list.</p>'
+    : '';
+  return '<h4>' + heading + '</h4>' +
+    '<input type="text" class="txn-filter" placeholder="' + esc(filterPlaceholder) + '">' +
+    '<div class="txn-scroll"><table>' + theadHtml + bodyHtml + '</table></div>' +
+    '<p class="txn-count">' + shown.length.toLocaleString() + ' of ' +
+    allRows.length.toLocaleString() + ' shown</p>' + capNote;
+}}
+
 // rows.json is keyed by the exact raw contributor name campaign-finance's
 // own scraper recorded, which is not always this entity's canonical display
 // name (a different source may have won that pick -- see build_entities.py
@@ -958,25 +998,25 @@ function campaignFinanceTxns(e, rowsData) {{
 }}
 
 function renderTxnTable(txns) {{
-  if (!txns.length) return '';
-  const rowsHtml = txns.slice(0, 200).map(t => {{
-    const [dateStr, amount, filerName, orgId, city, state, desc, included, era] = t;
-    const recipient = orgId
-      ? '<a href="' + ORG_DETAIL_URL.replace('{{org_id}}', encodeURIComponent(orgId)) +
-        '" target="_blank" rel="noopener">' + esc(filerName) + '</a>'
-      : esc(filerName);
-    const place = [city, state].filter(Boolean).join(', ');
-    const legacyNote = era === 'pre2022' ? ' <span class="era-tag">pre-2022</span>' : '';
-    const dim = included ? '' : ' style="opacity:.55" title="not counted toward the total -- see include_in_total"';
-    return '<tr' + dim + '><td>' + esc(dateStr) + legacyNote + '</td><td class="n">' +
-      cfMoney(amount) + '</td><td>' + recipient + '</td><td>' + esc(place) + '</td>' +
-      '<td>' + esc(desc) + '</td></tr>';
-  }}).join('');
-  const more = txns.length > 200
-    ? '<p class="hint">' + (txns.length - 200).toLocaleString() + ' more not shown.</p>' : '';
-  return '<h4>Itemized campaign-finance records</h4>' +
-    '<table><tr><th>Date</th><th>Amount</th><th>To</th><th>City, State</th><th>Description</th></tr>' +
-    rowsHtml + '</table>' + more;
+  return itemizedBlock(
+    'Itemized campaign-finance records',
+    ['Date', 'Amount', 'To', 'City, State', 'Description'],
+    txns,
+    t => {{
+      const [dateStr, amount, filerName, orgId, city, state, desc, included, era] = t;
+      const recipient = orgId
+        ? '<a href="' + ORG_DETAIL_URL.replace('{{org_id}}', encodeURIComponent(orgId)) +
+          '" target="_blank" rel="noopener">' + esc(filerName) + '</a>'
+        : esc(filerName);
+      const place = [city, state].filter(Boolean).join(', ');
+      const legacyNote = era === 'pre2022' ? ' <span class="era-tag">pre-2022</span>' : '';
+      const dim = included ? '' : ' style="opacity:.55" title="not counted toward the total -- see include_in_total"';
+      return '<tr' + dim + '><td>' + esc(dateStr) + legacyNote + '</td><td class="n">' +
+        cfMoney(amount) + '</td><td>' + recipient + '</td><td>' + esc(place) + '</td>' +
+        '<td>' + esc(desc) + '</td></tr>';
+    }},
+    'Filter by recipient, city, or description…'
+  );
 }}
 
 // Same lazy, cache-once pattern as loadCampaignFinanceRows -- the spending
@@ -998,24 +1038,24 @@ function campaignExpenditures(e, expendData) {{
 }}
 
 function renderExpendituresTable(txns) {{
-  if (!txns.length) return '';
-  const rowsHtml = txns.slice(0, 200).map(t => {{
-    const [dateStr, amount, payeeName, desc, city, state, supportOppose, included, era] = t;
-    const place = [city, state].filter(Boolean).join(', ');
-    const legacyNote = era === 'pre2022' ? ' <span class="era-tag">pre-2022</span>' : '';
-    const dim = included ? '' : ' style="opacity:.55" title="not counted toward the total -- see include_in_total"';
-    const stance = supportOppose
-      ? ' <span class="' + (POSITION_CLASS[supportOppose] || '') + '">' + esc(supportOppose) + '</span>'
-      : '';
-    return '<tr' + dim + '><td>' + esc(dateStr) + legacyNote + '</td><td class="n">' +
-      cfMoney(amount) + '</td><td>' + esc(payeeName) + stance + '</td><td>' + esc(place) + '</td>' +
-      '<td>' + esc(desc) + '</td></tr>';
-  }}).join('');
-  const more = txns.length > 200
-    ? '<p class="hint">' + (txns.length - 200).toLocaleString() + ' more not shown.</p>' : '';
-  return '<h4>Campaign spending</h4>' +
-    '<table><tr><th>Date</th><th>Amount</th><th>Paid to</th><th>City, State</th><th>Description</th></tr>' +
-    rowsHtml + '</table>' + more;
+  return itemizedBlock(
+    'Campaign spending',
+    ['Date', 'Amount', 'Paid to', 'City, State', 'Description'],
+    txns,
+    t => {{
+      const [dateStr, amount, payeeName, desc, city, state, supportOppose, included, era] = t;
+      const place = [city, state].filter(Boolean).join(', ');
+      const legacyNote = era === 'pre2022' ? ' <span class="era-tag">pre-2022</span>' : '';
+      const dim = included ? '' : ' style="opacity:.55" title="not counted toward the total -- see include_in_total"';
+      const stance = supportOppose
+        ? ' <span class="' + (POSITION_CLASS[supportOppose] || '') + '">' + esc(supportOppose) + '</span>'
+        : '';
+      return '<tr' + dim + '><td>' + esc(dateStr) + legacyNote + '</td><td class="n">' +
+        cfMoney(amount) + '</td><td>' + esc(payeeName) + stance + '</td><td>' + esc(place) + '</td>' +
+        '<td>' + esc(desc) + '</td></tr>';
+    }},
+    'Filter by payee, city, or description…'
+  );
 }}
 
 // Same pattern as loadCampaignFinanceRows: ne-lobbying's own already-published
@@ -1033,19 +1073,19 @@ const POSITION_CLASS = {{Support: 'pos-s', Oppose: 'pos-o', Neutral: 'pos-x'}};
 // (e.lobby_id, same source_id build_entities.py already writes) -- an exact
 // key into positions.json, no alias-guessing needed.
 function renderPositionsTable(positions) {{
-  if (!positions.length) return '';
   const sorted = positions.slice().sort((a, b) => (b[0] + b[1]).localeCompare(a[0] + a[1]));
-  const rowsHtml = sorted.slice(0, 200).map(p => {{
-    const [legislature, bill, position, lobbyist] = p;
-    const cls = POSITION_CLASS[position] || '';
-    return '<tr><td>' + esc(legislature) + '</td><td>' + esc(bill) + '</td>' +
-      '<td class="' + cls + '">' + esc(position) + '</td><td>' + esc(lobbyist) + '</td></tr>';
-  }}).join('');
-  const more = positions.length > 200
-    ? '<p class="hint">' + (positions.length - 200).toLocaleString() + ' more not shown.</p>' : '';
-  return '<h4>Registered lobbying positions</h4>' +
-    '<table><tr><th>Legislature</th><th>Bill</th><th>Position</th><th>Lobbyist</th></tr>' +
-    rowsHtml + '</table>' + more;
+  return itemizedBlock(
+    'Registered lobbying positions',
+    ['Legislature', 'Bill', 'Position', 'Lobbyist'],
+    sorted,
+    p => {{
+      const [legislature, bill, position, lobbyist] = p;
+      const cls = POSITION_CLASS[position] || '';
+      return '<tr><td>' + esc(legislature) + '</td><td>' + esc(bill) + '</td>' +
+        '<td class="' + cls + '">' + esc(position) + '</td><td>' + esc(lobbyist) + '</td></tr>';
+    }},
+    'Filter by bill or lobbyist…'
+  );
 }}
 
 // Per-entity export only -- see the PRIVACY comment at the button's markup.
@@ -1153,6 +1193,12 @@ function downloadCSV(filename, rows) {{
 }}
 
 list.addEventListener('click', ev => {{
+  // A click inside an itemized table (the filter box, a scroll drag that
+  // ends as a click, an org-detail link) must not also collapse the entity
+  // it lives in -- without this, focusing the filter box closed the whole
+  // section out from under you.
+  if (ev.target.closest('.txns-slot')) return;
+
   const dlBtn = ev.target.closest('.dl-btn');
   if (dlBtn) {{
     const row = dlBtn.closest('.entity');
@@ -1214,6 +1260,20 @@ list.addEventListener('click', ev => {{
       posSlot.innerHTML = renderPositionsTable(positionsData[e.lobby_id] || []);
     }}).catch(() => {{ posSlot.textContent = 'Could not load registered positions.'; }});
   }}
+}});
+// Filters one itemized table's rows in place, delegated so it works for
+// tables injected later by the lazy fetches above.
+list.addEventListener('input', ev => {{
+  const inp = ev.target.closest('.txn-filter');
+  if (!inp) return;
+  const term = inp.value.trim().toLowerCase();
+  const scroll = inp.nextElementSibling;
+  const table = scroll && scroll.querySelector('table');
+  if (!table) return;
+  [...table.rows].forEach((tr, i) => {{
+    if (i === 0) return; // header row
+    tr.hidden = !!term && !tr.textContent.toLowerCase().includes(term);
+  }});
 }});
 pills.addEventListener('click', ev => {{
   const btn = ev.target.closest('.pill');
