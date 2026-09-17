@@ -72,6 +72,22 @@ def test_non_fec_entity_has_zero_fec_recs():
     assert index[0][fec_recs_col] == 0
 
 
+def test_fec_entity_carries_its_dollar_amount():
+    """indiv24/indiv26.zip pulled -- fec_amt threads through the lazy index
+    the same way fec_recs already did, not a hardcoded 0."""
+    rows = _rows(("1", "DOE, JANE", "DOE, JANE", "fec", 2, 450.0, ""))
+    index = build_full_index(rows)
+    fec_amt_col = INDEX_COLUMNS.index("fec_amt")
+    assert index[0][fec_amt_col] == 450.0
+
+
+def test_non_fec_entity_has_zero_fec_amt():
+    rows = _rows(("1", "ACME CO", "ACME CO", "contracts", 3, 100.0, ""))
+    index = build_full_index(rows)
+    fec_amt_col = INDEX_COLUMNS.index("fec_amt")
+    assert index[0][fec_amt_col] == 0
+
+
 CANONICAL_HEADER = [
     "entity_id", "canonical_name", "alias", "normalized_key", "source", "era",
     "role", "entity_type", "records", "amount", "source_id", "source_url",
@@ -174,6 +190,25 @@ def test_retrieval_dates_no_note_once_indiv_pulled(tmp_path, monkeypatch):
     dates = retrieval_dates()
 
     assert "fec_note" not in dates
+
+
+def test_retrieval_dates_always_carries_the_fec_contributor_name_caveat(tmp_path, monkeypatch):
+    """Not gated on the indiv-pull gap like fec_note -- this caveat is about
+    load_fec_contributors() keying by raw name (real collisions measured
+    2026-09-16), so it applies whether or not indiv has been pulled yet."""
+    root = tmp_path / "ne-connect"
+    root.mkdir()
+    fec_dir = tmp_path / "ne-fec" / "data"
+    fec_dir.mkdir(parents=True)
+    (fec_dir / "scrape_meta.json").write_text(
+        json.dumps({"2024": {"cm": {"retrieved_at": "2026-09-15T06:01:16Z"}}})
+    )
+    monkeypatch.setattr(build_site, "ROOT", root)
+
+    dates = retrieval_dates()
+
+    assert "fec_contributor_note" in dates
+    assert dates["fec_contributor_note"]
 
 
 def test_retrieval_dates_ignores_non_dataset_shaped_keys(tmp_path, monkeypatch):

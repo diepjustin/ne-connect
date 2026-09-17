@@ -72,7 +72,7 @@ existing reader having to change:
 
 `name, bits, contract_amt, contract_recs, contrib_amt, contrib_recs,
 lobby_recs, lobby_id, aliases, contrib_amt_legacy, contrib_recs_legacy,
-disclosure_recs, fec_recs`
+disclosure_recs, fec_recs, disclosure_ids, fec_amt`
 
 `bits` is a source bitmask (`contracts=1, campaign_finance=2, lobbying=4,
 disclosures=32, fec=16` — 8 is reserved for SoS, Phase 2, blocked; see
@@ -85,11 +85,13 @@ pre-2022 figure. The two are never summed — `build_site.py`'s JS renders them
 as two lines when both are present. `disclosure_recs` (Phase 1.5) is a C-1/C-2
 filer's item count; there is no `disclosure_amt` — a financial disclosure has
 no dollar concept, unlike every other source here. `fec_recs` (Phase 3) is a
-committee's or candidate's own record count; there is no `fec_amt` yet —
-`indiv24.zip` (individual itemized contributions, the only FEC dataset with a
-dollar figure) has not been pulled, so a dollar column would misleadingly
-assert "checked, found nothing" rather than "not loaded". See
-`retrieval_dates()`'s `fec_note` for how the page states that gap.
+committee's, candidate's, or contributor's own record count. `fec_amt`
+(added once `indiv24.zip`/`indiv26.zip` were pulled) is itemized individual
+contributions only — FEC's own $200 itemization floor, not Nebraska's $250,
+and filtered on the *donor's* home state, so this is "Nebraskans giving to
+any federal committee," not "money given to a Nebraska candidate." See
+`SOURCE_LABELS["fec"]`'s caveat text in `build_site.py` for the exact wording
+shown on the page.
 
 ## `index.html`'s inline payload
 
@@ -145,9 +147,11 @@ into `counterparty_name_raw` on the line-fallback extraction path.
 
 ## Upstream: `ne-fec`'s processed artifacts
 
-Built and hub-wired 2026-09-15 (`PLAN.md` Phase 3). Local-only repo (no
-GitHub remote); every `source_url` points at fec.gov's own data pages, so
-none of this depends on `ne-fec` ever being published.
+Built and hub-wired 2026-09-15 (`PLAN.md` Phase 3); `ne-fec` itself was
+published to GitHub once `indiv24.zip`/`indiv26.zip` were pulled (see
+`docs/DATA_SOURCES.md`'s FEC section for the URL and its weekly refresh
+workflow). Every `source_url` still points at fec.gov's own data pages, not
+at `ne-fec`, so nothing here depends on that repo staying up.
 
 `data/fec_committees_ne.csv` (`scripts/normalize.py`): one row per Nebraska
 committee, `cmte_id, cmte_name, treasurer_name, city, state, zip,
@@ -165,14 +169,36 @@ person; PLAN.md's original Phase 3 text said "organizations", which would
 have let match.py auto-merge a candidate's name with a vendor's on
 similarity alone. Deviation noted here and in `PLAN.md`.
 
-`data/fec_contributions_ne.csv`: header-only today — `sub_id, cmte_id,
-cmte_name, amndt_ind, rpt_tp, transaction_tp, entity_tp, name, city, state,
-zip, transaction_dt, transaction_amt, other_id, tran_id, file_num,
-image_num, cycle, source_url, source_snapshot`. `indiv24.zip` (4.24 GB,
-individual itemized contributions — the only FEC dataset with real dollar
-figures) is deliberately not pulled yet; `load_fec_contributors()` reads
-whatever rows exist (none today) so it activates automatically once that
-decision changes, with no code to remember to wire in later.
+`data/fec_contributions_ne.csv`: `sub_id, cmte_id, cmte_name, amndt_ind,
+rpt_tp, transaction_tp, entity_tp, name, city, state, zip, transaction_dt,
+transaction_amt, other_id, tran_id, file_num, image_num, cycle, source_url,
+source_snapshot`. Real rows since `indiv24.zip`/`indiv26.zip` (individual
+itemized contributions, >$200, the only FEC dataset with real dollar
+figures) were pulled. `load_fec_contributors()` reads it as
+`entity_type="individual"` when `entity_tp == "IND"`, else
+`"organization"` (a PAC, a corporation making an independent expenditure,
+etc); `load_fec_contribution_rows()` reads the same file into the
+`d/fec_rows.json` shape below.
+
+## Self-published: `d/fec_rows.json`
+
+Not a cross-fetch: `ne-fec` publishes data files, not a GitHub Pages site,
+so there is nothing to fetch from at runtime the way `ne-campaign-finance`/
+`ne-lobbying`/`ne-contracts` are below. Instead `build/export_fec.py`
+(`write_fec_rows_json()`) reshapes `data/fec_contributions_ne.csv` into this
+project's own `d/fec_rows.json` at build time, and `build_site.py`'s
+`main()` writes it alongside `d/entities.json` on every build.
+
+Shape: `{raw_name: [[date, amount, cmte_name, city, state, source_url], ...]}`
+— same `{name: [[row], ...]}` convention the cross-fetched files below use.
+`date` is `YYYY-MM-DD`, reformatted from FEC's raw `MMDDYYYY` by
+`ingest/sources.py _fec_date_iso()` so the column sorts lexicographically;
+everything else is passed through as published. Keyed by the exact raw
+`name` `load_fec_contributors()` recorded (not always the entity's
+canonical display name) — `build_site.py`'s JS tries every alias plus the
+display name as a lookup key, same pattern `campaignFinanceTxns()` already
+uses for `d/rows.json`. **No street address** — the source column never
+carries one, and city/state-only matches `docs/PRIVACY.md` rule 2.
 
 ## Cross-fetch: `ne-campaign-finance`'s `d/rows.json`
 

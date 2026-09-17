@@ -22,10 +22,13 @@ Exploration found the hub shipping in a degraded state and the lobbying collecti
 - `ne-connect/new/`: fold `docs/*.md` and `CLAUDE.md` into `ne-connect/`, delete the rest.
 
 **Open work: itemized records (added 2026-09-15, lobbying done
-2026-09-15, disclosures done 2026-09-15, contracts done 2026-09-15).** All
-four practical sources are done now (this section and below):
-- **FEC** individual contributions are moot until `indiv24.zip` is pulled;
-  committees/candidates are already fully shown (no itemized breakdown to add).
+2026-09-15, disclosures done 2026-09-15, contracts done 2026-09-15, FEC
+done 2026-09-16).** All five sources are done now (this section and below):
+- **FEC** individual contributions: `indiv24.zip`/`indiv26.zip` pulled
+  2026-09-16, self-published as `d/fec_rows.json` (`build/export_fec.py` --
+  there's no `ne-fec` site to cross-fetch from) and wired into the dossier
+  panel the same way contracts/campaign-finance itemized rows are. See
+  Phase 3 below for the full writeup.
 
 **Lobbying, done 2026-09-15.** `ne-lobbying/scripts/build_site.py` gained
 `build_positions_index()` -> `d/positions.json`, `{principal_id: [[legislature,
@@ -430,40 +433,78 @@ Tests: parsers from trimmed captures; `match_kind`; idempotency; hub union-witho
 `docs/DATA_SOURCES.md` for the exact robots.txt/legal-notice finding).
 `download_bulk.py`, `filter_ne.py`, `normalize.py`, `check_data.py` built and
 validated against the real 2024-cycle `cn24.zip`/`cm24.zip` (51 NE candidates,
-97 NE committees, 21 tests). `indiv24.zip` (4.24 GB) deliberately not pulled —
-that's a real, bounded decision for later, not scaffolding. `ne-fec/` is
-local-only, no GitHub remote. Hub integration (below) not started.
+97 NE committees, 21 tests).
 
-**Hub integration done 2026-09-15** (committees and candidates only —
-`indiv24.zip` still not pulled, see above). `ingest/sources.py`:
-`load_fec_committees()`, `load_fec_candidates()`, `load_fec_contributors()`
-(the last returns `{}` on today's header-only `fec_contributions_ne.csv`
-and activates on its own once `indiv24.zip` lands). **Correction to this
-plan's own text below:** "committees and candidates as organizations" was
-wrong for candidates — a candidate is a real person, so
+**`indiv24.zip`/`indiv26.zip` pulled, `ne-fec` published, 2026-09-16.**
+`indiv24.zip` (4,244,259,029 bytes) and `cn26`/`cm26`/`indiv26.zip`
+(2,186,550,443 bytes for `indiv26`) were pulled and normalized. Combined
+real NE row counts: **97 candidates, 202 committees, 404,474
+contributions** (2024 alone: 51/97/250,610; 2026 alone: 46/105/153,864).
+
+**Two real bugs found on this first full-size pull, fixed same day** (see
+`docs/DATA_SOURCES.md`'s FEC section for the full writeup, `ne-fec` commit
+`5769573`): `indiv24.zip` has 34 members, not one (a complete `itcont.txt`
+plus a byte-for-byte-redundant `by_date/` breakdown of the same rows) --
+`filter_ne.py` now prefers the sole top-level member instead of erroring.
+`normalize.py` used to truncate-and-overwrite its output CSVs on every
+`--cycle` call, silently discarding 2024's rows once 2026 was normalized --
+`--cycle` now accepts multiple cycles (or defaults to every cycle under
+`data/raw/`) and combines them in one write.
+
+`ne-fec` was published to `github.com/diepjustin/ne-fec` (was local-only)
+with a new `ne-fec-weekly.yml` workflow (Sunday, current cycle only, older
+cycles restored from cache and combined via the fixed `normalize.py`).
+`ne-connect-nightly.yml` was **not** built as part of this — it doesn't
+exist for any source yet, so building it just for FEC would be scope creep;
+`build_entities.py`/`build_site.py` stay a manual run for now.
+
+**Hub integration done 2026-09-15, extended 2026-09-16.**
+`ingest/sources.py`: `load_fec_committees()`, `load_fec_candidates()`,
+`load_fec_contributors()` (real rows now, since the 2026-09-16 pull), plus
+new `load_fec_contribution_rows()` for the itemized dossier export.
+**Correction to this plan's own text below:** "committees and candidates as
+organizations" was wrong for candidates — a candidate is a real person, so
 `load_fec_candidates()` sets `entity_type="individual"`, which is what
 keeps `match.py`'s person guard from ever auto-merging a candidate's name
-with a vendor's. `build/build_entities.py` wires `fec` into every pairing;
-bit 16 in `build_site.py`'s `SOURCE_BITS`. Verified against the real data:
-148 fec keys, 21 cross-matched with an existing campaign-finance entity
-(Deb Fischer for US Senate, both major Douglas County parties, HDR Inc.'s
-employee PAC, among others). `SOURCE_LABELS["fec"]` reads "FEC Committees &
-Candidates" rather than "Federal Contributions" — there is no `fec_amt`
-column yet, and the page states the `indiv24.zip` gap explicitly
-(`retrieval_dates()`'s `fec_note`, derived from `scrape_meta.json` lacking
-an `"indiv"` key) rather than implying a $0 finding.
-`SOURCE_PROJECTS["fec"]` links to `fec.gov/data/`, not the local-only
-`ne-fec` repo. 113 tests passing in `ne-connect` (8 new, 105→113).
+with a vendor's.
+
+**Pairing deviates from this plan's original "wires `fec` into every
+pairing" text, on purpose.** `build/build_entities.py` now splits the
+single merged `fec` dict into `fec_orgs` (committees + candidates — keeps
+every original pairing: contracts, campaign_finance, lobbying,
+disclosures) and `fec_contributors` (individual itemized donors — paired
+against `campaign_finance` only). Contributors are deliberately excluded
+from the contracts/lobbying/disclosures pairings: those can never
+auto-merge (`involves_person`), and with potentially tens of thousands of
+contributor keys, pairing them everywhere would flood the review queue for
+no benefit. Both still write `Party.source = "fec"`; bit 16 in
+`build_site.py`'s `SOURCE_BITS` is unchanged — only the pairing graph is
+asymmetric, not the displayed source. `SOURCE_LABELS["fec"]` is now "FEC
+Contributions" (was "FEC Committees & Candidates"); `fec_amt` was added to
+`INDEX_COLUMNS`, threaded through `figures()`'s JS with the $200-vs-$250
+itemization caveat and the donor-state-not-recipient-state caveat.
+`SOURCE_PROJECTS["fec"]` still links to `fec.gov/data/`, not `ne-fec`.
+
+Real counts against the pulled data, rebuilt 2026-09-17: **207 fec_org_keys,
+29,125 fec_contributor_keys, 138,817 canonical_entities,
+entities_in_two_or_more_sources up to 2,190** (was 1,877 at this session's
+start, before any FEC work). **awaiting_review is now 14,656** (was 4,896) —
+the new campaign_finance × fec_contributors pairing alone nearly tripled the
+review queue, which is exactly why contributors were scoped to that one
+pairing rather than all four (see above): pairing against contracts/
+lobbying/disclosures too, with 29,125 contributor keys, would have been far
+worse for no auto-merge benefit. 130 tests passing in `ne-connect` (105→130
+across this session's FEC work; +22 in `ne-fec`, now 22 total there).
 
 Bulk files per cycle at `https://www.fec.gov/files/bulk-downloads/<YYYY>/`: `indiv<yy>.zip`, `cm<yy>.zip`, `cn<yy>.zip`, optionally `pas2<yy>.zip`, `oth<yy>.zip`; headers from `data_dictionaries/`. No API key, reproducible snapshots.
 
 - `scripts/download_bulk.py` (stream to `data/raw/<cycle>/`, sha256 in `scrape_meta.json`); `scripts/filter_ne.py` (stream-decode; `STATE == "NE"` from indiv, `CMTE_ST == "NE"` from cm, `CAND_ST == "NE" or CAND_OFFICE_ST == "NE"` from cn; never load indiv whole); `scripts/normalize.py` → `fec_contributions_ne.csv`, `fec_committees_ne.csv`, `fec_candidates_ne.csv`; `check_data.py`; `tests/`.
 - Contributions schema: `sub_id, cmte_id, cmte_name, amndt_ind, rpt_tp, transaction_tp, entity_tp, name, city, state, zip, transaction_dt, transaction_amt, other_id, tran_id, file_num, image_num, cycle, source_url, source_snapshot`; `source_url = https://docquery.fec.gov/cgi-bin/fecimg/?<IMAGE_NUM>`. Employer and occupation are kept in raw only, not in processed output (privacy parity with NADC handling).
 - Dedup: `sub_id`; fallback `(cycle, image_num, tran_id)`; same `(cmte_id, tran_id)` keeps newest `file_num` as the `include_in_total` analogue. Rewritten from raw each run.
-- Hub: bit 16; `load_fec_contributors()` with `entity_type="individual"` when `entity_tp == "IND"` (always review, never auto-merge, no connection edges, no address display); parse `LAST, FIRST` per `sources.py:130-146`. Committees and candidates as organizations with `source_id`. Named columns `fec_amt`, `fec_recs`; label "Federal contributions (FEC)" with the $200 federal itemization caveat versus Nebraska's $250.
-- Workflow `ne-fec-weekly.yml`: Sunday, current cycle only, older cycles from cache; add FEC restore to `ne-connect-nightly.yml`.
+- **Done 2026-09-16.** Hub: bit 16; `load_fec_contributors()` with `entity_type="individual"` when `entity_tp == "IND"` (never auto-merge; only paired against `campaign_finance`, not contracts/lobbying/disclosures -- see above). Committees and candidates as organizations with `source_id`, paired against all four sources as before. Named columns `fec_amt`, `fec_recs`; label "FEC Contributions" with the $200 federal itemization caveat versus Nebraska's $250, and a donor-state-not-recipient-state caveat (`filter_ne.py` filters on the donor's home state).
+- **Done 2026-09-16.** Workflow `ne-fec-weekly.yml`: Sunday, current cycle only, older cycles from cache. `ne-connect-nightly.yml` (the hub's own rebuild automation) is explicitly **not** part of this -- it doesn't exist for any source yet; `build_entities.py`/`build_site.py` stay a manual run.
 
-Tests: header gate; NE-only filter; `sub_id` dedupe; person parse; FEC `IND` never auto-merges with a vendor. Risks: indiv zips multi-GB (stream, cache NE slice per cycle). Effort: 3-5 days.
+Tests: header gate; NE-only filter; `sub_id` dedupe; person parse; FEC `IND` never auto-merges with a vendor; `fec_contributors` never pairs against contracts/lobbying/disclosures (new `tests/test_build_entities.py`). Risks: indiv zips multi-GB (stream, cache NE slice per cycle) -- realized cost: **TODO, fill in real wall-clock once the pull finishes**. Effort: 3-5 days (recon+scaffolding+committees/candidates) + 1 day (this pass: indiv pull, pairing split, dollar figure, publish ne-fec).
 
 ---
 

@@ -569,13 +569,12 @@ def load_fec_candidates(data_dir: Path = None):
 def load_fec_contributors(data_dir: Path = None):
     """FEC itemized contributors, keyed by raw name.
 
-    Empty today: `fec_contributions_ne.csv` is header-only because
-    `indiv24.zip` (4.24 GB) was deliberately not pulled yet (PLAN.md Phase 3)
-    -- this reads whatever is there so it activates automatically once that
-    decision changes, without anyone having to remember to wire it in later.
-    `entity_tp == "IND"` is a real person and never auto-merges (match.py's
-    involves_person guard); anything else is an organization (a PAC, a
-    corporation making an independent expenditure, etc).
+    Reads whatever `fec_contributions_ne.csv` has -- empty until a real
+    `indiv<yy>.zip` cycle is pulled, real rows once it is, with no code
+    change needed either way. `entity_tp == "IND"` is a real person and
+    never auto-merges (match.py's involves_person guard); anything else is
+    an organization (a PAC, a corporation making an independent
+    expenditure, etc).
     """
     data_dir = Path(data_dir or FEC_DATA)
     path = data_dir / "fec_contributions_ne.csv"
@@ -608,3 +607,54 @@ def load_fec_contributors(data_dir: Path = None):
             if city:
                 party.cities.add(city)
     return contributors
+
+
+def _fec_date_iso(raw: str) -> str:
+    """FEC's own TRANSACTION_DT is MMDDYYYY -- reformat to YYYY-MM-DD so an
+    itemized table's date column sorts lexicographically, same convention
+    every other source's date column already relies on. Falls back to the
+    raw string on anything that doesn't parse cleanly rather than dropping
+    a real record over a formatting mismatch.
+    """
+    raw = (raw or "").strip()
+    if len(raw) == 8 and raw.isdigit():
+        mm, dd, yyyy = raw[:2], raw[2:4], raw[4:]
+        return f"{yyyy}-{mm}-{dd}"
+    return raw
+
+
+def load_fec_contribution_rows(data_dir: Path = None) -> dict:
+    """Full itemized FEC contributions, keyed by the SAME raw `name`
+    load_fec_contributors() keys its Party objects by -- consumed by
+    build/export_fec.py's d/fec_rows.json, not by build_entities.py.
+
+    Row: [date (YYYY-MM-DD), amount, cmte_name, city, state, source_url],
+    newest first. PRIVACY: no street address -- fec_contributions_ne.csv
+    never carries one, and city/state-only matches docs/PRIVACY.md rule 2.
+    """
+    data_dir = Path(data_dir or FEC_DATA)
+    path = data_dir / "fec_contributions_ne.csv"
+    if not path.exists():
+        return {}
+
+    rows_by_name = defaultdict(list)
+    with path.open(encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh):
+            name = (row.get("name") or "").strip()
+            if not name:
+                continue
+            try:
+                amount = float(row["transaction_amt"]) if row.get("transaction_amt") else 0.0
+            except ValueError:
+                amount = 0.0
+            rows_by_name[name].append([
+                _fec_date_iso(row.get("transaction_dt") or ""),
+                amount,
+                (row.get("cmte_name") or "").strip(),
+                (row.get("city") or "").strip().upper(),
+                (row.get("state") or "").strip().upper(),
+                (row.get("source_url") or "").strip(),
+            ])
+    for rows in rows_by_name.values():
+        rows.sort(key=lambda r: r[0], reverse=True)
+    return dict(rows_by_name)

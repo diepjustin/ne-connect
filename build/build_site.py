@@ -27,6 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ingest"))
 
+from export_fec import write_fec_rows_json  # noqa: E402
 
 DATA_DIR = ROOT / "data"
 OUT_PATH = ROOT / "index.html"
@@ -51,11 +52,10 @@ SOURCE_LABELS = {
     "campaign_finance": "Contributions",
     "lobbying": "Lobbying",
     "disclosures": "Financial Disclosures",
-    # Not "Federal Contributions" yet: fec_contributions_ne.csv is header-only
-    # today (indiv24.zip, 4.24 GB, deliberately not pulled -- PLAN.md Phase
-    # 3). Label what's actually loaded; relabel once individual itemized
-    # contributions land.
-    "fec": "FEC Committees & Candidates",
+    # Relabeled once indiv24/indiv26.zip were pulled and fec_contributions_ne.csv
+    # stopped being header-only -- previously "FEC Committees & Candidates"
+    # while there was no dollar figure to show at all.
+    "fec": "FEC Contributions",
 }
 
 # Where a reader goes to check a number rather than take it on trust.
@@ -84,15 +84,15 @@ INDEX_COLUMNS = [
     # concept, so there is no disclosure_amt column.
     "disclosure_recs",
     # Phase 3: committees + candidates only, item count same as disclosures.
-    # No fec_amt column yet -- fec_contributions_ne.csv (the dollar figures)
-    # is header-only until indiv24.zip is pulled, and a $0 column would
-    # misleadingly assert "checked, found nothing" rather than "not loaded".
     "fec_recs",
     # disclosure_ids is a list, not a single id like lobby_id: one person can
     # file more than one disclosure (different years), each with its own
-    # disclosure_id, all sharing one normalized-key entity. Appended last to
-    # match build_full_index()'s append order -- see that function.
+    # disclosure_id, all sharing one normalized-key entity.
     "disclosure_ids",
+    # indiv24/indiv26.zip pulled -- fec_contributions_ne.csv is no longer
+    # header-only, so there's a real dollar figure to carry. Appended last to
+    # match build_full_index()'s append order -- see that function.
+    "fec_amt",
 ]
 
 
@@ -167,6 +167,24 @@ def retrieval_dates():
                 "committees and candidates only -- individual itemized "
                 "contributions (indiv24.zip) have not been downloaded yet"
             )
+        # Always shown once contributions exist, not gated on a data gap
+        # like fec_note above: real-data measurement (2026-09-16) found 893
+        # of 29,973 distinct contributor names carry more than one Nebraska
+        # city across their records -- mostly the SAME person recorded
+        # under a typo or a city-naming variant (e.g. Elkhorn/Omaha, merged
+        # by annexation in 2007), sometimes two different people sharing a
+        # name. FEC's bulk data carries no donor id to tell which, and
+        # splitting by city would fragment real people's totals over a
+        # typo more often than it would separate two real donors -- so
+        # names are kept as FEC's own filings report them, with this
+        # caveat surfaced rather than a false-precision fix.
+        dates["fec_contributor_note"] = (
+            "Individual contributions are grouped by the name in FEC's own "
+            "filings. A shared name occasionally merges two different "
+            "people; far more often it's one person recorded under a "
+            "typo or a city-spelling variant across filings. FEC's bulk "
+            "data carries no donor id to disambiguate further."
+        )
     return dates
 
 
@@ -361,6 +379,7 @@ def build_full_index(rows):
             disclosures[0],
             fec[0],
             sorted(set(disclosure_ids)),
+            round(fec[1]),
         ])
     index.sort(key=lambda e: (-bin(e[1]).count("1"), -e[2], e[0]))
     return index
@@ -791,13 +810,18 @@ function figures(e) {{
       return '<div class="fig">' + t.records.toLocaleString() +
         '<span>' + LABELS[s] + ' · items disclosed · self-reported</span></div>';
     }}
-    // FEC: committees and candidates only today, no dollar figure at all --
-    // individual itemized contributions (the actual money) aren't loaded
-    // yet, so this is a record count same as disclosures, not $0.
+    // FEC contributions carry a real dollar figure now (indiv24/indiv26.zip
+    // pulled), but the caveat matters: filter_ne.py filters on the DONOR's
+    // home state, so this is "Nebraskans giving to any federal committee,"
+    // not "money given to a Nebraska candidate" -- and FEC's own itemization
+    // floor is $200, not Nebraska's $250, so the two totals aren't directly
+    // comparable.
     if (s === 'fec') {{
-      return '<div class="fig">' + t.records.toLocaleString() +
-        '<span>' + LABELS[s] + ' · FEC.gov record' +
-        (t.records > 1 ? 's' : '') + '</span></div>';
+      return '<div class="fig">' + money(t.amount) +
+        '<span>' + LABELS[s] + ' · ' + t.records.toLocaleString() + ' record' +
+        (t.records > 1 ? 's' : '') +
+        ' · FEC.gov, $200+ itemized · by Nebraska donor, any recipient' +
+        '</span></div>';
     }}
     // Lobbying is counted in registered positions, and carries a dollar figure
     // only where the principal's Form C has been collected. An entity with no
@@ -909,6 +933,9 @@ function openDossier(idx) {{
     if (s === 'fec' && RETRIEVED.fec_note) {{
       line += '<div class="alias">' + esc(RETRIEVED.fec_note) + '</div>';
     }}
+    if (s === 'fec' && RETRIEVED.fec_contributor_note) {{
+      line += '<div class="alias">' + esc(RETRIEVED.fec_contributor_note) + '</div>';
+    }}
     return line;
   }}).join('');
 
@@ -946,6 +973,12 @@ function openDossier(idx) {{
     ? '<div class="txns-slot disc-slot"></div>' : '';
   const contractsSlot = e.sources.includes('contracts')
     ? '<div class="txns-slot contracts-slot"></div>' : '';
+  // Same treatment for individuals and organizations as campaign_finance
+  // already gets above -- neither source distinguishes the two in the
+  // dossier today (see docs/PRIVACY.md rule 1, not yet enforced at this
+  // layer for any source).
+  const fecSlot = e.sources.includes('fec')
+    ? '<div class="txns-slot fec-slot"></div>' : '';
 
   dossier.innerHTML =
     '<button class="dossier-close" type="button" aria-label="Close">&times;</button>' +
@@ -963,7 +996,7 @@ function openDossier(idx) {{
     // CSV export is fine. A 'download all 240,000 contributors' button is
     // not.") -- never add a site-wide or filtered-list export button.
     '<button class="dl-btn" type="button">Download this entity as CSV</button>' +
-    txnsSlot + spendSlot + posSlot + discSlot + contractsSlot +
+    txnsSlot + spendSlot + posSlot + discSlot + contractsSlot + fecSlot +
     '</div>';
   dossier.classList.add('show');
   document.body.classList.add('dossier-open');
@@ -1005,6 +1038,14 @@ function openDossier(idx) {{
       contractsSlotEl.innerHTML = renderContractRows(txns);
     }}).catch(() => {{ contractsSlotEl.textContent = 'Could not load contracts.'; }});
   }}
+
+  if (e.sources.includes('fec')) {{
+    const fecSlotEl = dossier.querySelector('.fec-slot');
+    fecSlotEl.textContent = 'Loading FEC contributions…';
+    loadFecRows().then(rowsData => {{
+      fecSlotEl.innerHTML = renderFecTable(fecTxns(e, rowsData));
+    }}).catch(() => {{ fecSlotEl.textContent = 'Could not load FEC contributions.'; }});
+  }}
 }}
 
 // The lazily-fetched index is {{columns, rows}}; widen each row, by column
@@ -1043,7 +1084,7 @@ function widen(row) {{
     totals.disclosures = {{records: row[COL.disclosure_recs], amount: 0}};
   }}
   if (bits & BITS.fec) {{
-    totals.fec = {{records: row[COL.fec_recs], amount: 0}};
+    totals.fec = {{records: row[COL.fec_recs], amount: row[COL.fec_amt] || 0}};
   }}
   const name = row[COL.name];
   const lobbyId = row[COL.lobby_id];
@@ -1165,6 +1206,47 @@ function renderTxnTable(txns) {{
         '<td>' + esc(desc) + '</td></tr>';
     }},
     'Filter by recipient, city, or description…'
+  );
+}}
+
+// Self-published, not cross-fetched: ne-fec has no site of its own to fetch
+// from (see build/export_fec.py's docstring) -- this project's own build
+// wrote d/fec_rows.json, so this is fetch('d/fec_rows.json'), not another
+// repo's URL like every loadXRows() above it.
+let FEC_ROWS = null;
+function loadFecRows() {{
+  if (FEC_ROWS) return Promise.resolve(FEC_ROWS);
+  return fetch('d/fec_rows.json').then(r => r.json())
+    .then(j => {{ FEC_ROWS = j; return j; }});
+}}
+
+// Same alias-try pattern as campaignFinanceTxns -- fec_rows.json is keyed by
+// the raw name load_fec_contributors() recorded, not always this entity's
+// canonical display name.
+function fecTxns(e, rowsData) {{
+  const keys = new Set([e.name, ...e.aliases.map(a => a.name)]);
+  const txns = [];
+  keys.forEach(k => {{ (rowsData[k] || []).forEach(t => txns.push(t)); }});
+  txns.sort((a, b) => (b[0] || '').localeCompare(a[0] || ''));
+  return txns;
+}}
+
+function renderFecTable(txns) {{
+  return itemizedBlock(
+    'Itemized FEC contributions',
+    ['Date', 'Amount', 'Committee', 'City, State', 'Record'],
+    txns,
+    t => {{
+      const [dateStr, amount, cmteName, city, state, sourceUrl] = t;
+      const place = [city, state].filter(Boolean).join(', ');
+      const record = sourceUrl
+        ? '<a href="' + esc(sourceUrl) + '" target="_blank" rel="noopener">view filing</a>'
+        : '';
+      return '<tr><td>' + esc(dateStr) + '</td><td class="n">' + cfMoney(amount) +
+        '</td><td>' + esc(cmteName) + '</td><td>' + esc(place) + '</td>' +
+        '<td>' + record + '</td></tr>';
+    }},
+    'Filter by committee or city…'
   );
 }}
 
@@ -1357,7 +1439,7 @@ function csvCell(v) {{
   return /["\\n,]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }}
 
-function entityToCSVRows(e, cfTxns, spending, positions, discItems, contractTxns) {{
+function entityToCSVRows(e, cfTxns, spending, positions, discItems, contractTxns, fecRows) {{
   const rows = [CSV_HEADER];
   const push = obj => rows.push(CSV_HEADER.map(col => obj[col] ?? ''));
 
@@ -1379,7 +1461,7 @@ function entityToCSVRows(e, cfTxns, spending, positions, discItems, contractTxns
       amount: t.amount || '', records: t.records,
       note: s === 'disclosures' ? 'items disclosed, self-reported'
         : s === 'lobbying' ? 'self-reported'
-        : s === 'fec' ? 'FEC.gov record, committees/candidates only' : '',
+        : s === 'fec' ? 'FEC.gov, $200+ itemized, by Nebraska donor (any recipient)' : '',
     }});
   }});
 
@@ -1437,6 +1519,15 @@ function entityToCSVRows(e, cfTxns, spending, positions, discItems, contractTxns
     }});
   }});
 
+  (fecRows || []).forEach(t => {{
+    const [dateStr, amount, cmteName, city, state, sourceUrl] = t;
+    push({{
+      entity: e.name, record_type: 'fec_contribution', source: 'fec',
+      date: dateStr, amount, recipient: cmteName,
+      city_state: [city, state].filter(Boolean).join(', '), note: sourceUrl,
+    }});
+  }});
+
   return rows;
 }}
 
@@ -1478,6 +1569,7 @@ dossier.addEventListener('click', ev => {{
   const wantsPos = e.sources.includes('lobbying') && e.lobby_id;
   const wantsDisc = e.sources.includes('disclosures') && e.disclosure_ids && e.disclosure_ids.length;
   const wantsContracts = e.sources.includes('contracts');
+  const wantsFec = e.sources.includes('fec');
   dlBtn.disabled = true;
   dlBtn.textContent = 'Preparing…';
   Promise.all([
@@ -1486,15 +1578,17 @@ dossier.addEventListener('click', ev => {{
     wantsPos ? loadLobbyingPositions() : Promise.resolve(null),
     wantsDisc ? loadDisclosureItems() : Promise.resolve(null),
     wantsContracts ? loadContractRows(e) : Promise.resolve(null),
-  ]).then(([rowsData, expendData, positionsData, itemsData, contractTxns]) => {{
+    wantsFec ? loadFecRows() : Promise.resolve(null),
+  ]).then(([rowsData, expendData, positionsData, itemsData, contractTxns, fecRowsData]) => {{
     const cfTxns = rowsData ? campaignFinanceTxns(e, rowsData) : [];
     const spending = expendData ? campaignExpenditures(e, expendData) : [];
     const positions = positionsData ? (positionsData[e.lobby_id] || []) : [];
     const items = itemsData ? disclosureItems(e, itemsData) : [];
+    const fecRows = fecRowsData ? fecTxns(e, fecRowsData) : [];
     downloadCSV(slugify(e.name) + '.csv',
-      entityToCSVRows(e, cfTxns, spending, positions, items, contractTxns || []));
+      entityToCSVRows(e, cfTxns, spending, positions, items, contractTxns || [], fecRows));
   }}).catch(() => {{
-    downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, [], [], [], [], []));
+    downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, [], [], [], [], [], []));
   }}).finally(() => {{
     dlBtn.disabled = false;
     dlBtn.textContent = 'Download this entity as CSV';
@@ -1543,6 +1637,8 @@ def main() -> int:
     index_payload = {"columns": INDEX_COLUMNS, "rows": full}
     INDEX_PATH.write_text(json.dumps(index_payload, separators=(",", ":")), encoding="utf-8")
 
+    fec_rows_bytes = write_fec_rows_json()
+
     summary_path = DATA_DIR / "entities_summary.json"
     summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
     html = render(entities, summary, lobbying_coverage(), retrieval_dates(), len(full))
@@ -1550,6 +1646,7 @@ def main() -> int:
 
     print(f"  searchable entities {len(full):>8,}  -> d/{INDEX_PATH.name}"
           f" ({INDEX_PATH.stat().st_size / 1024 / 1024:.2f} MB)")
+    print(f"  fec_rows.json bytes {fec_rows_bytes:>8,}")
     print(f"  inline, cross-source{len(entities):>8,}")
     print(f"  in all three        {sum(1 for e in entities if len(e['sources']) == 3):>8,}")
     print(f"  page size           {len(html.encode('utf-8')) / 1024:>8.0f} KB")

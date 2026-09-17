@@ -140,6 +140,25 @@ def test_fec_individual_contributor_parsed_when_present(tmp_path):
     assert contributors["DOE, JANE"].total_amount == 250.0
 
 
+FEC_ORG_CONTRIBUTION = (
+    "sub_id,cmte_id,cmte_name,amndt_ind,rpt_tp,transaction_tp,entity_tp,name,"
+    "city,state,zip,transaction_dt,transaction_amt,other_id,tran_id,file_num,"
+    "image_num,cycle,source_url,source_snapshot\n"
+    "2,C00003988,NEBRASKA DEMOCRATIC PARTY,N,Q1,24K,ORG,SOME PAC,OMAHA,NE,"
+    "68102,20240115,500.00,,T2,1,IMG2,2024,https://docquery.fec.gov/cgi-bin/"
+    "fecimg/?IMG2,2026-09-15T06:01:24Z\n"
+)
+
+
+def test_fec_non_individual_contributor_is_an_organization(tmp_path):
+    """entity_tp values other than IND -- a PAC, a corporation making an
+    independent expenditure -- are organizations, not people; only IND rows
+    ever hit match.py's involves_person guard."""
+    (tmp_path / "fec_contributions_ne.csv").write_text(FEC_ORG_CONTRIBUTION)
+    contributors = load_fec_contributors(tmp_path)
+    assert contributors["SOME PAC"].entity_type == "organization"
+
+
 def test_campaign_filer_is_always_an_organization(tmp_path):
     (tmp_path / "contributions.csv").write_text(CONTRIBUTIONS)
     filers = load_campaign_filers(tmp_path)

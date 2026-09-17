@@ -128,16 +128,18 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
     # load_fec_candidates()'s docstring on why PLAN.md's "as organizations"
     # was wrong) merged before keying, same reasoning as contributors' two
     # eras: neither dict clobbers the other since they're keyed by different
-    # ids (cmte_id vs cand_id) upstream. load_fec_contributors() is empty
-    # today (indiv24.zip not pulled) and simply contributes nothing.
-    fec = _keyed({
-        **load_fec_committees(), **load_fec_candidates(), **load_fec_contributors()
-    })
+    # ids (cmte_id vs cand_id) upstream.
+    fec_orgs = _keyed({**load_fec_committees(), **load_fec_candidates()})
+    # Kept as its own dict, paired far more narrowly than fec_orgs below --
+    # see _pairings()'s docstring. Empty until indiv24.zip (or a later
+    # cycle's indiv zip) is pulled; simply contributes nothing until then.
+    fec_contributors = _keyed(load_fec_contributors())
 
     # IDF is computed over ALL sources, so a token's rarity reflects the whole
     # corpus rather than whichever list happens to be largest.
     index = TokenIndex(
-        list(vendors) + list(contributors) + list(lobbying) + list(disclosures) + list(fec)
+        list(vendors) + list(contributors) + list(lobbying) + list(disclosures)
+        + list(fec_orgs) + list(fec_contributors)
     )
 
     # Everything the authority pass can see. Contracts and campaign finance
@@ -145,7 +147,7 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
     # contribute here -- but the pass is source-agnostic and will pick up any
     # source that does.
     all_parties = {}
-    for keyed in (vendors, contributors, lobbying, disclosures, fec):
+    for keyed in (vendors, contributors, lobbying, disclosures, fec_orgs, fec_contributors):
         for key, parties in keyed.items():
             all_parties.setdefault(key, []).extend(parties)
 
@@ -160,25 +162,7 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
     # need scoring like any other cross-source pair.
     matches = []
     seen_pairs = set()
-    pairings = (
-        ("contracts", vendors, "campaign_finance", contributors),
-        ("contracts", vendors, "lobbying", lobbying),
-        ("campaign_finance", contributors, "lobbying", lobbying),
-        # Disclosure filers are individuals (see load_disclosure_filers()),
-        # so match.py's involves_person guard means none of these three ever
-        # auto-accept -- they only ever reach the review queue.
-        ("contracts", vendors, "disclosures", disclosures),
-        ("campaign_finance", contributors, "disclosures", disclosures),
-        ("lobbying", lobbying, "disclosures", disclosures),
-        # fec mixes organizations (committees) and individuals (candidates,
-        # and contributors once indiv24.zip lands) -- _dominant_type below
-        # already handles a mixed-type key, and involves_person still means
-        # any pairing that resolves to a person only ever reaches review.
-        ("contracts", vendors, "fec", fec),
-        ("campaign_finance", contributors, "fec", fec),
-        ("lobbying", lobbying, "fec", fec),
-        ("disclosures", disclosures, "fec", fec),
-    )
+    pairings = _pairings(vendors, contributors, lobbying, disclosures, fec_orgs, fec_contributors)
     for left_source, left_keyed, right_source, right_keyed in pairings:
         for left, right in candidate_pairs(left_keyed, right_keyed, index):
             # left == right is NOT skipped. An identical key appearing in two
@@ -232,7 +216,7 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
     clustered = {member for members in clusters.groups().values() for member in members}
     singletons = {
         key
-        for keyed in (vendors, contributors, lobbying, disclosures, fec)
+        for keyed in (vendors, contributors, lobbying, disclosures, fec_orgs, fec_contributors)
         for key in keyed
         if key not in clustered
     }
@@ -241,14 +225,21 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
 
     entities = []
     for root, members in sorted(groups.items()):
-        display_name = _canonical_name(members, vendors, contributors, lobbying, disclosures, fec)
+        display_name = _canonical_name(
+            members, vendors, contributors, lobbying, disclosures, fec_orgs, fec_contributors
+        )
         for member in sorted(members):
             for source, keyed in (
                 ("contracts", vendors),
                 ("campaign_finance", contributors),
                 ("lobbying", lobbying),
                 ("disclosures", disclosures),
-                ("fec", fec),
+                # Both still labelled "fec" here (not "fec_contributors") --
+                # this is the displayed source/bit on the site, which stays
+                # one FEC source; _pairings() below is the only place the
+                # split changes matching behavior.
+                ("fec", fec_orgs),
+                ("fec", fec_contributors),
             ):
                 for party in keyed.get(member, []):
                     entities.append(
@@ -296,7 +287,8 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
         "lobbying_keys": len(lobbying),
         "lobbying_principals": len(lobbying_principals),
         "disclosure_filer_keys": len(disclosures),
-        "fec_keys": len(fec),
+        "fec_org_keys": len(fec_orgs),
+        "fec_contributor_keys": len(fec_contributors),
         "hard_id_links": len(hard_links),
         "entities_in_two_or_more_sources": multi_source,
         "candidates_scored": len(matches),
@@ -339,6 +331,41 @@ def _canonical_name(members, *keyed_sources) -> str:
     complete = [a for a in aliases if not a.rstrip().endswith("...")]
     tidy = [a for a in (complete or aliases) if not _BOOKKEEPING.search(a)]
     return max(tidy or complete or aliases, key=len)
+
+
+def _pairings(vendors, contributors, lobbying, disclosures, fec_orgs, fec_contributors):
+    """Which two sources' keyed dicts get scored against each other.
+
+    fec_contributors (individual itemized FEC donors) gets exactly one
+    pairing -- campaign_finance -- deliberately excluding contracts/
+    lobbying/disclosures. Those would only ever produce person-vs-
+    organization review-queue proposals (match.py's involves_person guard
+    means a person can never auto-merge with an org) with no auto-merge
+    upside, for a source that can run into the tens of thousands of keys.
+    fec_orgs (committees + candidates) keeps every pairing fec itself used
+    to have -- that cross-matching (e.g. a company's employee PAC against
+    the company-as-vendor) is real, already-validated value.
+    """
+    return (
+        ("contracts", vendors, "campaign_finance", contributors),
+        ("contracts", vendors, "lobbying", lobbying),
+        ("campaign_finance", contributors, "lobbying", lobbying),
+        # Disclosure filers are individuals (see load_disclosure_filers()),
+        # so match.py's involves_person guard means none of these three ever
+        # auto-accept -- they only ever reach the review queue.
+        ("contracts", vendors, "disclosures", disclosures),
+        ("campaign_finance", contributors, "disclosures", disclosures),
+        ("lobbying", lobbying, "disclosures", disclosures),
+        # fec_orgs mixes organizations (committees) and individuals
+        # (candidates) -- _dominant_type below already handles a mixed-type
+        # key, and involves_person still means any pairing that resolves to
+        # a person only ever reaches review.
+        ("contracts", vendors, "fec", fec_orgs),
+        ("campaign_finance", contributors, "fec", fec_orgs),
+        ("lobbying", lobbying, "fec", fec_orgs),
+        ("disclosures", disclosures, "fec", fec_orgs),
+        ("campaign_finance", contributors, "fec", fec_contributors),
+    )
 
 
 def _dominant_type(parties) -> str:

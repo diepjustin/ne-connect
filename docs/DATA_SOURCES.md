@@ -295,12 +295,13 @@ redistributing any of it.**
 
 ## FEC federal campaign finance
 
-- **Status:** recon and scaffolding done, hub integration done 2026-09-15
-  (`PLAN.md` Phase 3) — committees and candidates only; individual itemized
-  contributions (`indiv24.zip`) not pulled, see below.
-- **Repo:** `github.com/diepjustin/ne-fec` (local-only so far — no GitHub
-  remote, not pushed anywhere; stays local until a human decides to publish
-  it).
+- **Status:** individual itemized contributions added 2026-09-16 —
+  `indiv24.zip` and `indiv26.zip` (the current cycle) pulled, filtered, and
+  wired into the hub. Committees/candidates-only integration was done
+  2026-09-15 (`PLAN.md` Phase 3); see below for what changed.
+- **Repo:** `github.com/diepjustin/ne-fec`, published 2026-09-16 (previously
+  local-only, no GitHub remote) with a `ne-fec-weekly.yml` workflow that
+  refreshes the current cycle's `cn`/`cm`/`indiv` files on a Sunday cadence.
 - **URL:** bulk files at `https://www.fec.gov/files/bulk-downloads/<YYYY>/`
   (`cn<yy>.zip` candidates, `cm<yy>.zip` committees, `indiv<yy>.zip`
   individual contributions, `pas2<yy>.zip`/`oth<yy>.zip` inter-committee
@@ -329,43 +330,82 @@ redistributing any of it.**
   Per CLAUDE.md rule 6, this is **not blocked** — bulk download proceeded.
   This restriction is also why `EMPLOYER`/`OCCUPATION` never reach processed
   output regardless (privacy parity with NADC handling, `docs/PRIVACY.md`).
-- **Scale:** `indiv<yy>.zip` (itemized individual contributions, >$200) is
-  multi-GB — 4.24 GB for the 2024 cycle alone, confirmed via HEAD request.
-  `cn<yy>.zip` (356 KB) and `cm<yy>.zip` (883 KB) for 2024 are trivially
+- **Scale, pulled and validated 2026-09-16:** `indiv24.zip` was 4.24 GB
+  (confirmed on disk: 4,244,259,029 bytes); `indiv26.zip` (2026, the current
+  cycle) was 2,186,550,443 bytes. `cn<yy>.zip`/`cm<yy>.zip` are trivially
   small by comparison. `ne-fec/scripts/download_bulk.py` streams to disk in
-  fixed-size chunks (never buffers a whole file); `filter_ne.py` stream-
-  decodes and filters line by line so the national `indiv` file is never
-  materialized as a list. A real pull and timing of a full `indiv<yy>.zip`
-  has **not** been done yet — budget it as a bounded weekly run, not part of
-  routine work; see `ne-fec/README.md` "What's still open."
-- **Validated against real data:** pulled the real 2024-cycle `cn24.zip` and
-  `cm24.zip` and ran the full pipeline end to end — **51 Nebraska
-  candidates, 97 Nebraska committees**, `check_data.py` clean. 21 tests, no
-  network, in `ne-fec/tests/`.
-- **Hub integration done 2026-09-15.** `ingest/sources.py` gained
-  `load_fec_committees()` (`entity_type="organization"` always) and
+  fixed-size chunks (never buffers a whole file); `filter_ne.py`
+  stream-decodes and filters line by line so the national `indiv` file is
+  never materialized as a list.
+
+  **Real bug found on this first full-size pull, fixed same day:**
+  `indiv24.zip` turned out to have 34 members, not one — a complete
+  `itcont.txt` plus a redundant `by_date/` breakdown of the identical rows
+  (confirmed byte-for-byte: the `by_date/` members' sizes sum to
+  `itcont.txt`'s size exactly). `filter_ne.py` assumed exactly one member
+  and errored instead of double-counting; fixed to prefer the sole
+  top-level member. Separately, `normalize.py` rewrote the processed CSVs
+  from scratch on every `--cycle` call, so pulling 2024 then 2026 silently
+  discarded 2024's rows — fixed so `--cycle` accepts multiple cycles (or
+  defaults to every cycle found under `data/raw/`) and combines them into
+  one write. See `ne-fec`'s commit `5769573`.
+- **Validated against real data (both cycles combined):** 2024 — 51
+  candidates, 97 committees, 250,610 NE contributions. 2026 — 46
+  candidates, 105 committees, 153,864 NE contributions. Combined — **97
+  candidates, 202 committees, 404,474 contributions**, `check_data.py`
+  clean (no duplicate keys, no forbidden columns). 22 tests, no network, in
+  `ne-fec/tests/`.
+- **Name-collision caveat, measured 2026-09-16.** `load_fec_contributors()`
+  keys individual donors by raw name (29,973 distinct names in the combined
+  data). 893 of those names (~3%) show more than one Nebraska city across
+  their records. Inspecting the highest-dollar cases found this is mostly
+  **not** two different people colliding: `RICKETTS, J. PETER`
+  (Lincoln | Omaha, likely Gov. Pete Ricketts, who legitimately has both —
+  also appears as `RICKETTS, PETE` and `RICKETTS, J PETER MR.`),
+  `PEED, SHAWN` (`LINCHOLN` | `LINCOLN`, a plain typo in FEC's own raw
+  data), `PAHLKE, ROBERT` (`SCOTTSBLUFF` | `SCOTTSBLUFF, NEBRA`, a
+  truncated state suffix stuck onto the city field), and several
+  Elkhorn/Omaha pairs (Elkhorn was annexed into Omaha in 2007; people still
+  list it either way for the same real address). **Decision: ship as-is,
+  document the caveat** rather than re-key by `(name, city)` — that would
+  fix real collisions but fragment far more real people's totals over a
+  typo or the Elkhorn/Omaha naming quirk, which is the larger error in the
+  other direction. FEC's bulk data carries no donor id to disambiguate
+  cleanly either way. Surfaced on the page via `retrieval_dates()`'s
+  always-on `fec_contributor_note` (not gated like `fec_note`, which only
+  fires while `indiv` hasn't been pulled at all).
+- **Hub integration done 2026-09-15, extended 2026-09-16.** `ingest/sources.py`
+  gained `load_fec_committees()` (`entity_type="organization"` always) and
   `load_fec_candidates()` (`entity_type="individual"` always — **PLAN.md's
   original Phase 3 text said "committees and candidates as organizations",
   which was wrong**: a candidate is a real person, and match.py's
   `involves_person` guard exists precisely to stop a name like "GRACE,
   DENNIS B." from auto-merging with a vendor on name similarity alone;
   corrected here rather than followed literally). `load_fec_contributors()`
-  reads `fec_contributions_ne.csv` (header-only today) and returns `{}`
-  cleanly. `build/build_entities.py` wires `fec` into every pairing (bit 16
-  in `build_site.py`'s `SOURCE_BITS`). Rebuilt against the real data: 148
-  fec keys (51 candidates + 97 committees), **21 of them cross-matched with
-  an existing campaign-finance entity** — e.g. Deb Fischer for US Senate,
-  the Douglas County Republican and Democratic parties, HDR Inc.'s employee
-  PAC. `entities_in_two_or_more_sources` is now 1,734 (`data/` is gitignored,
-  so there's no committed prior figure to diff against).
-  `SOURCE_LABELS["fec"]` is "FEC Committees & Candidates", not "Federal
-  Contributions" — there's no dollar figure to show yet, and the page's
-  `retrieval_dates()`/`fec_note` states that gap explicitly (derived from
-  `scrape_meta.json` lacking an `"indiv"` key, not from the CSV being
-  empty) rather than rendering a `$0` that would misleadingly assert
-  "checked, found nothing." `SOURCE_PROJECTS["fec"]` links to
-  `https://www.fec.gov/data/` (fec.gov's own front door), not the local-only
-  `ne-fec` repo. 113 tests passing in `ne-connect` (8 new).
+  reads `fec_contributions_ne.csv`, now real rows since the 2026-09-16 pull.
+  `SOURCE_LABELS["fec"]` is now "FEC Contributions" (was "FEC Committees &
+  Candidates" while there was no dollar figure to show).
+  `SOURCE_PROJECTS["fec"]` still links to `https://www.fec.gov/data/`
+  (fec.gov's own front door), not `ne-fec`.
+
+  **Pairing deviates from PLAN.md's original text on purpose.**
+  `build/build_entities.py` now splits the merged "fec" dict into
+  `fec_orgs` (committees + candidates, keeping every pairing against
+  contracts/campaign_finance/lobbying/disclosures the original merged dict
+  had — e.g. the Douglas County Republican and Democratic parties, HDR
+  Inc.'s employee PAC) and `fec_contributors` (individual itemized donors,
+  paired against `campaign_finance` only). Contributors were deliberately
+  **not** paired against contracts/lobbying/disclosures: those are
+  person-vs-organization pairs that can never auto-merge
+  (`involves_person`), and with potentially tens of thousands of
+  contributor keys, pairing them everywhere would flood the review queue
+  with proposals that carry no auto-merge upside. Both dicts still write
+  `Party.source = "fec"` (bit 16 unchanged) — only the pairing graph is
+  asymmetric, not the displayed source.
+
+  Real counts (row totals, cross-matches, review-queue delta):
+  **TODO once the 2026-09-16 pull and rebuild finish** — see the "Scale"
+  bullet above.
 
 ---
 
