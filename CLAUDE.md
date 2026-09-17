@@ -56,12 +56,16 @@ ne-connect/             this repo -- the hub, read-only over the above
               REPO_ROOT comment).
   resolve/    normalize.py, index.py (blocking/IDF), match.py (scoring),
               authority.py (source-id short-circuit), resolutions.py (the
-              human decision ledger)
+              human decision ledger), apply_review.py (merges a review
+              session's decisions into the ledger)
   build/      build_entities.py (the resolution pipeline -> canonical_entities.csv)
               build_site.py (index.html + d/entities.json)
+              build_review_tool.py (pipeline/review.html, below)
   data/       rebuilt from the pipeline; only data/manual/ is version-controlled
   index.html  the published page, at the repo root because that's the served path
   d/          the lazily-fetched full search index
+  pipeline/   gitignored, local-only tools -- never committed, never published
+              (currently: review.html, the review-queue reviewer)
 ```
 
 Runtime: each sibling scrapes on its own GitHub Actions cadence and publishes its

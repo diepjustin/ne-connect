@@ -195,6 +195,7 @@ def build(out_dir: Path = None, ledger_path: Path = None) -> dict:
             row["right_source"] = right_source
             row["vendor_names"] = " | ".join(sorted({p.name for p in left_keyed[left]}))
             row["contributor_names"] = " | ".join(sorted({p.name for p in right_keyed[right]}))
+            row.update(_city_columns(left_keyed[left], right_keyed[right]))
             matches.append(row)
 
     accepted = [m for m in matches if m["decision"] in ("auto", "accepted")]
@@ -378,6 +379,16 @@ def _money_columns(vendor_parties, contributor_parties) -> dict:
         "contract_total": round(sum(p.total_amount for p in vendor_parties), 2),
         "contribution_records": sum(p.record_count for p in contributor_parties),
         "contribution_total": round(sum(p.total_amount for p in contributor_parties), 2),
+    }
+
+
+def _city_columns(left_parties, right_parties) -> dict:
+    """The disambiguating signal a reviewer actually needs for the hardest
+    case (individual x individual) -- empty for sources that don't track
+    Party.cities (contracts, lobbying, disclosures)."""
+    return {
+        "left_cities": " | ".join(sorted({c for p in left_parties for c in p.cities})),
+        "right_cities": " | ".join(sorted({c for p in right_parties for c in p.cities})),
     }
 
 

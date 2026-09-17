@@ -12,3 +12,11 @@ data/manual/*
 !data/manual/*.csv
 
 venv/
+
+# Local-only tools (docs/PRIVACY.md): pipeline/review.html embeds the entire
+# unreviewed review_queue.csv verbatim, including every individual x
+# individual name-collision guess. index.html is served from the repo root by
+# GitHub Pages, so a committed pipeline/ would publish the raw, unreviewed
+# candidate list right alongside the finished site -- this must never be
+# committed, only generated locally on demand by build/build_review_tool.py.
+pipeline/

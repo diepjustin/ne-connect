@@ -504,7 +504,62 @@ Bulk files per cycle at `https://www.fec.gov/files/bulk-downloads/<YYYY>/`: `ind
 - **Done 2026-09-16.** Hub: bit 16; `load_fec_contributors()` with `entity_type="individual"` when `entity_tp == "IND"` (never auto-merge; only paired against `campaign_finance`, not contracts/lobbying/disclosures -- see above). Committees and candidates as organizations with `source_id`, paired against all four sources as before. Named columns `fec_amt`, `fec_recs`; label "FEC Contributions" with the $200 federal itemization caveat versus Nebraska's $250, and a donor-state-not-recipient-state caveat (`filter_ne.py` filters on the donor's home state).
 - **Done 2026-09-16.** Workflow `ne-fec-weekly.yml`: Sunday, current cycle only, older cycles from cache. `ne-connect-nightly.yml` (the hub's own rebuild automation) is explicitly **not** part of this -- it doesn't exist for any source yet; `build_entities.py`/`build_site.py` stay a manual run.
 
-Tests: header gate; NE-only filter; `sub_id` dedupe; person parse; FEC `IND` never auto-merges with a vendor; `fec_contributors` never pairs against contracts/lobbying/disclosures (new `tests/test_build_entities.py`). Risks: indiv zips multi-GB (stream, cache NE slice per cycle) -- realized cost: **TODO, fill in real wall-clock once the pull finishes**. Effort: 3-5 days (recon+scaffolding+committees/candidates) + 1 day (this pass: indiv pull, pairing split, dollar figure, publish ne-fec).
+Tests: header gate; NE-only filter; `sub_id` dedupe; person parse; FEC `IND` never auto-merges with a vendor; `fec_contributors` never pairs against contracts/lobbying/disclosures (new `tests/test_build_entities.py`). Risks: indiv zips multi-GB (stream, cache NE slice per cycle) -- realized cost: 4.24 GB (`indiv24.zip`) + 2.19 GB (`indiv26.zip`) pulled and normalized in one session, no timeout issues once run in the background. Effort: 3-5 days (recon+scaffolding+committees/candidates) + 1 day (this pass: indiv pull, pairing split, dollar figure, publish ne-fec).
+
+---
+
+## Review-queue tooling (`pipeline/`), done 2026-09-17
+
+Direct follow-on from Phase 3: `awaiting_review` jumped from 4,896 to 14,656 the
+moment `campaign_finance` x `fec_contributors` landed, and `data/manual/
+resolutions.csv` had **zero rows** despite existing since this project's first
+version -- `Resolution.pair_id` is a truncated SHA256 (`resolve/resolutions.py`),
+so a human could never actually hand-write a valid row. There had never been a
+working way to record a decision, FEC aside.
+
+Real breakdown of the queue that motivated this (`data/review_queue.csv`, checked
+directly): 14,228 fuzzy / 428 `identical_key` (a fast, low-thought yes/no per
+`match.py`'s own `Match.kind` doc comment); 8,976 individual x individual, 3,652
+organization x organization, 2,028 mixed; by source pair, `campaign_finance`/`fec`
+alone is 9,762 of the 14,656.
+
+Built:
+- `build/build_entities.py` gained `_city_columns()` -- `left_cities`/
+  `right_cities` on every `match_candidates.csv`/`review_queue.csv` row, the
+  disambiguating signal a reviewer actually needs for the hardest case
+  (`individual` x `individual`), sourced from `Party.cities` (already tracked by
+  `campaign_finance` and `fec` contributors, empty for sources that don't track
+  it).
+- `build/build_review_tool.py` -> `pipeline/review.html`: a single self-contained
+  HTML+CSS+JS page (no framework, matches `index.html`'s own embedded-payload
+  convention) embedding the full queue, filterable by match kind / entity-type
+  combo / source pair / free text. Same/Different/Skip per pair, kept in
+  `localStorage` as an in-session convenience only (not the system of record --
+  a cache clear must never destroy a real decision).
+- `resolve/apply_review.py`: merges the page's exported CSV
+  (`left_key,right_key,decision,note`) into `resolutions.csv`, reusing the
+  *existing* `Resolution`/`Ledger`/`pair_id` machinery verbatim -- no new
+  hashing. `--by` supplies `decided_by` once per session rather than asking the
+  browser tool to know who's using it. Idempotent by `pair_id`.
+- **`pipeline/` is gitignored, on purpose, and must stay that way**:
+  `index.html` publishes from the repo root via GitHub Pages, so a committed
+  `pipeline/review.html` would publish the entire *unreviewed* candidate list
+  (every individual x individual guess included) right alongside the finished
+  site -- a materially bigger exposure than the finished site itself, which only
+  ever shows scored/confirmed entities.
+
+Intended rhythm: review a batch in the browser -> export -> `apply_review.py` ->
+rerun `build/build_entities.py` (drops decided pairs from the next
+`review_queue.csv` automatically, via `ledger.apply()`) -> regenerate
+`pipeline/review.html` from the shorter queue -> repeat.
+
+Tests: `_city_columns()` populated when both sides track cities, empty when a
+side doesn't (`tests/test_build_entities.py`); `apply_review.py` produces
+correctly-hashed `Resolution` rows with the right `decided_by`/`suggested_by`,
+and re-running the same export is idempotent, not duplicated
+(`tests/test_apply_review.py`, new). `pipeline/review.html`'s own JS is UI, not
+covered by the Python suite -- same scope note as every other dossier-rendering
+JS in this project.
 
 ---
 

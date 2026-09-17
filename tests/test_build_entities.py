@@ -9,7 +9,8 @@ of keys once indiv24.zip is pulled. fec_orgs (committees/candidates) keeps every
 pairing the single merged "fec" dict used to have.
 """
 
-from build_entities import _pairings
+from build_entities import _city_columns, _pairings
+from sources import Party
 
 VENDORS, CONTRIBUTORS, LOBBYING, DISCLOSURES = object(), object(), object(), object()
 FEC_ORGS, FEC_CONTRIBUTORS = object(), object()
@@ -34,6 +35,27 @@ def test_fec_contributors_never_paired_against_contracts_lobbying_or_disclosures
         if FEC_CONTRIBUTORS in (left_keyed, right_keyed):
             other = right_keyed if left_keyed is FEC_CONTRIBUTORS else left_keyed
             assert other not in (VENDORS, LOBBYING, DISCLOSURES)
+
+
+def test_city_columns_joins_distinct_cities_from_both_sides():
+    left = [Party(name="DOE, JANE", source="campaign_finance", role="contributor", cities={"OMAHA"})]
+    right = [
+        Party(name="DOE, JANE", source="fec", role="contributor", cities={"LINCOLN"}),
+        Party(name="DOE, J.", source="fec", role="contributor", cities={"OMAHA"}),
+    ]
+    cols = _city_columns(left, right)
+    assert cols["left_cities"] == "OMAHA"
+    assert cols["right_cities"] == "LINCOLN | OMAHA"
+
+
+def test_city_columns_empty_for_a_source_that_does_not_track_cities():
+    """contracts/lobbying/disclosures Party objects never populate .cities --
+    the review row must show an empty string, not crash or fabricate one."""
+    left = [Party(name="ACME CO", source="contracts", role="vendor")]
+    right = [Party(name="ACME COMPANY", source="lobbying", role="principal")]
+    cols = _city_columns(left, right)
+    assert cols["left_cities"] == ""
+    assert cols["right_cities"] == ""
 
 
 def test_fec_orgs_keeps_every_pairing_the_merged_fec_dict_used_to_have():

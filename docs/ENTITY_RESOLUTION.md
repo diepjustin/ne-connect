@@ -120,8 +120,15 @@ nothing below has landed:
   output goes to a proposals file, never straight into `resolutions.csv`, and
   every touched entity is labeled machine-proposed until a person approves it.
 - **Person-name resolution proper** (nickname tables, `LAST|FIRST_INITIAL`
-  blocking, side-by-side review UI for people). Today a person is simply never
-  auto-merged; there is no dedicated person-matching pipeline yet.
+  blocking). Today a person is simply never auto-merged; there is no dedicated
+  person-matching pipeline yet. **The review UI itself is built** as of
+  2026-09-17 (`pipeline/review.html`, `build/build_review_tool.py`,
+  `resolve/apply_review.py` — see `docs/SCHEMA.md`), general-purpose rather
+  than person-specific: it's the first working path for getting rows into
+  `resolutions.csv` at all, `pair_id`'s SHA256 having made hand-editing
+  impractical since day one. `resolutions.csv` itself is still at zero rows
+  as of this writing — the tool is verified end-to-end (export -> ledger,
+  idempotent) but has not yet been used for a real review session.
 - A dedicated blocking fallback (soundex/metaphone, n-gram residue matching)
   beyond the rare-token index above.
 

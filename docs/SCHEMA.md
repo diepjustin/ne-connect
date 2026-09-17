@@ -39,6 +39,13 @@ left_type, right_type`, plus `left_source`/`right_source`/`vendor_names`/
 `docs/ENTITY_RESOLUTION.md` for what feeds `decision`). `review_queue.csv` is
 ordered by dollars at stake, most first — it is meant to be worked top-down.
 
+Two more columns, added 2026-09-17 for `pipeline/review.html` (below):
+`left_cities`/`right_cities`, `build_entities.py _city_columns()` — a
+`" | "`-joined sample of `Party.cities` on each side, empty where a source
+doesn't track city at all (contracts, lobbying, disclosures). The
+disambiguating signal a reviewer actually needs for the hardest case
+(`individual` x `individual` — 8,976 of 14,656 rows in the queue this added).
+
 ## `data/manual/resolutions.csv`
 
 The decision ledger (`resolve/resolutions.py`). Version-controlled, human-
@@ -55,6 +62,33 @@ decision is recorded.
 | `suggested_by` | what proposed the pair: `auto`, `review`, or a model name |
 | `suggested_score` | the score at the time of the decision |
 | `note` | free text |
+
+## `pipeline/review.html` (local-only, gitignored — never published)
+
+Added 2026-09-17 because `resolutions.csv` had never actually been used:
+`pair_id` is a truncated SHA256 (`resolve/resolutions.py`'s `pair_id()`), which
+a human cannot hand-write in a spreadsheet, so there had never been a working
+way to record a decision. `build/build_review_tool.py` reads
+`data/review_queue.csv` and embeds every row verbatim as JSON into this one
+self-contained HTML+CSS+JS page (no framework, no external request, same
+convention as `index.html`'s own embedded payload) — filterable by
+`match_kind`, entity-type combo, and source pair. **This must never be
+committed**: `index.html` is served from the repo root by GitHub Pages, so a
+committed `pipeline/` would publish the entire *unreviewed* candidate list —
+every individual x individual name-collision guess — right alongside the
+finished site. `.gitignore`'s `pipeline/` entry is the enforcement; this
+paragraph is the reason not to remove it.
+
+A click on Same/Different is kept in the browser's `localStorage` as a
+session convenience only (an accidental reload shouldn't lose progress), not
+as the system of record — a cache clear must never be able to destroy a real
+decision. **Export decisions** downloads `left_key,right_key,decision,note`
+(`decision` is `same`/`different`) for whatever's been decided so far;
+`resolve/apply_review.py <export.csv> --by "name"` is the other half, turning
+that export into real `Resolution` rows via the *existing*
+`Resolution`/`Ledger`/`pair_id` machinery (no new hashing) and saving them
+into `resolutions.csv`. The intended rhythm is export-and-merge often, not
+one long session held only in `localStorage`.
 
 ## `data/entities_summary.json`
 
