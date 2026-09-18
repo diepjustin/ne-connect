@@ -110,15 +110,27 @@ for `same` (union-find, `resolve/resolutions.py UnionFind`); the pipeline does
 not currently detect or report a `different` verdict that would split an
 otherwise-unioned cluster.
 
+## LLM adjudication for the review band (built 2026-09-17)
+
+`resolve/llm_suggest.py` asks a local model (Ollama, `llama3.1:8b-instruct-
+q4_K_M` — no paid API, no new API key) about pairs in `data/review_queue.csv`
+and caches its answer in `pipeline/llm_suggestions.jsonl` (gitignored,
+local-only — see `docs/SCHEMA.md`). The boundary this section originally
+called for stands exactly: the model's output never reaches
+`data/manual/resolutions.csv` on its own. `build/build_review_tool.py`
+surfaces a cached suggestion in the review page's detail view, labeled
+unverified, never pre-selecting Same/Different — a human still has to click.
+When they do, `resolve/apply_review.py` records what the model actually said
+(`suggested_by`/`suggested_decision`/`suggested_score`) *alongside*, never in
+place of, the human's own `decision` — so a human overriding a suggestion
+stays visible in the ledger rather than looking identical to agreement.
+`CLAUDE.md`'s "Where the LLM is allowed" consolidates the governing rules.
+
 ## Not yet built
 
 These were part of the original design and are worth keeping in mind, but
 nothing below has landed:
 
-- **LLM adjudication** for the review band. No phase in `PLAN.md` currently
-  schedules it. If it lands, the rule stands regardless of phase numbering: its
-  output goes to a proposals file, never straight into `resolutions.csv`, and
-  every touched entity is labeled machine-proposed until a person approves it.
 - **Person-name resolution proper** (nickname tables, `LAST|FIRST_INITIAL`
   blocking). Today a person is simply never auto-merged; there is no dedicated
   person-matching pipeline yet. **The review UI itself is built** as of

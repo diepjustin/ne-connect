@@ -60,8 +60,46 @@ decision is recorded.
 | `decided_by` | a person's name or handle — never a model |
 | `decided_at` | ISO date |
 | `suggested_by` | what proposed the pair: `auto`, `review`, or a model name |
-| `suggested_score` | the score at the time of the decision |
+| `suggested_decision` | what the suggestion actually said: `same`, `different`, or `uncertain` — may disagree with `decision` (a human overriding a suggestion) |
+| `suggested_score` | the score/confidence at the time of the decision |
 | `note` | free text |
+
+## `pipeline/llm_suggestions.jsonl` (local-only, gitignored — never published)
+
+Added 2026-09-17 alongside `resolve/llm_suggest.py`: a triage aid over
+`data/review_queue.csv`, not a decision source (`CLAUDE.md`'s "Where the LLM
+is allowed" — nothing here ever reaches `resolutions.csv` on its own).
+Same sensitivity class as `pipeline/review.html`: it holds a local model's
+guesses about whether two named individuals are the same person, so it stays
+out of git for the same GitHub-Pages-publishing reason.
+
+Append-only JSONL, one record per line, keyed by `resolve/resolutions.py`'s
+`pair_id()` (last entry wins on reload — a retried pair's newer line
+supersedes its old one, same recovery shape as
+`ne-contracts/scripts/generate_ai_summaries.py`'s checkpoint). Shape:
+
+| field | notes |
+|---|---|
+| `pair_id` | same stable hash `resolutions.csv` uses — the join key `build/build_review_tool.py` uses to attach a suggestion to a queue row |
+| `left_key` / `right_key` | the two normalized keys |
+| `model` | which local model produced this (e.g. `llama3.1:8b-instruct-q4_K_M`) |
+| `decision` | `same`, `different`, or `uncertain` |
+| `confidence` | 0–1 float |
+| `reasoning` | one factual sentence, built only from data already in the queue row |
+| `prompt_hash` | sha256 of the rendered prompt, first 16 hex chars |
+| `generated_at` | ISO timestamp |
+| `seconds` | how long the call took |
+
+A row can instead be `{"pair_id", "left_key", "right_key", "model", "error"}`
+(and sometimes `"raw"`, the unparseable response) when the call failed or the
+model's response didn't parse as expected — `resolve/llm_suggest.py` retries
+an `"error"` record on its next run rather than treating it as done.
+
+`build/build_review_tool.py` flattens a matching, non-error record onto its
+queue row as `llm_model`/`llm_decision`/`llm_confidence`/`llm_reasoning` for
+the generated page's detail view. This file is entirely optional: when it
+doesn't exist, every row just gets empty `llm_*` fields and the page renders
+exactly as it did before this feature existed.
 
 ## `pipeline/review.html` (local-only, gitignored — never published)
 
@@ -82,13 +120,21 @@ paragraph is the reason not to remove it.
 A click on Same/Different is kept in the browser's `localStorage` as a
 session convenience only (an accidental reload shouldn't lose progress), not
 as the system of record — a cache clear must never be able to destroy a real
-decision. **Export decisions** downloads `left_key,right_key,decision,note`
-(`decision` is `same`/`different`) for whatever's been decided so far;
-`resolve/apply_review.py <export.csv> --by "name"` is the other half, turning
-that export into real `Resolution` rows via the *existing*
+decision. When `pipeline/llm_suggestions.jsonl` exists, the detail view shows
+a suggestion (labeled unverified, never pre-selecting a button), and a click
+captures that pair's `llm_model`/`llm_decision`/`llm_confidence` into the
+decision *at the moment of the click* — not re-derived later, since the cache
+can be regenerated between a session and an export. **Export decisions**
+downloads `left_key,right_key,decision,note,suggested_by,suggested_decision,
+suggested_score` (`decision` is `same`/`different`; the last three columns
+are empty for a pair with no suggestion shown) for whatever's been decided so
+far; `resolve/apply_review.py <export.csv> --by "name"` is the other half,
+turning that export into real `Resolution` rows via the *existing*
 `Resolution`/`Ledger`/`pair_id` machinery (no new hashing) and saving them
-into `resolutions.csv`. The intended rhythm is export-and-merge often, not
-one long session held only in `localStorage`.
+into `resolutions.csv`, using the export's own `suggested_by`/
+`suggested_decision`/`suggested_score` when present or falling back to
+`suggested_by="review"` when a pair had no suggestion. The intended rhythm is
+export-and-merge often, not one long session held only in `localStorage`.
 
 ## `data/entities_summary.json`
 

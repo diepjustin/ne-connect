@@ -10,6 +10,13 @@ Read-only over data/review_queue.csv; never touches resolutions.csv. See
 resolve/apply_review.py for the other half -- merging what a human decided
 in the generated page back into the ledger.
 
+If resolve/llm_suggest.py has been run, its pipeline/llm_suggestions.jsonl
+cache is flattened onto matching rows (llm_model/llm_decision/
+llm_confidence/llm_reasoning) so the generated page can show a labeled,
+unverified suggestion in the detail view -- optional and additive; the page
+renders exactly as before when that cache doesn't exist. Nothing here ever
+turns a suggestion into a decision: the human still has to click.
+
 Usage:
     python build/build_review_tool.py
 """
@@ -23,8 +30,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ingest"))
+sys.path.insert(0, str(ROOT / "resolve"))
 
 from build_site import SOURCE_PROJECTS  # noqa: E402
+from llm_suggest import CACHE_PATH as LLM_CACHE_PATH, load_checkpoint as load_llm_cache  # noqa: E402
+from resolutions import pair_id  # noqa: E402
 
 DATA_DIR = ROOT / "data"
 QUEUE_PATH = DATA_DIR / "review_queue.csv"
@@ -53,7 +63,26 @@ def load_queue(path: Path = None) -> list[dict]:
                 row[col] = float(row.get(col) or 0)
             except ValueError:
                 row[col] = 0
+    _attach_llm_suggestions(rows)
     return rows
+
+
+def _attach_llm_suggestions(rows: list[dict]) -> None:
+    """Flatten pipeline/llm_suggestions.jsonl onto matching rows, in place.
+
+    Optional and additive: resolve/llm_suggest.py's cache may not exist yet
+    (load_checkpoint returns {} when it doesn't), in which case every row
+    just gets empty llm_* fields and the page renders exactly as it did
+    before this feature existed.
+    """
+    cache = load_llm_cache(LLM_CACHE_PATH)
+    for row in rows:
+        record = cache.get(pair_id(row["left_key"], row["right_key"]))
+        ok = bool(record) and "error" not in record
+        row["llm_model"] = record.get("model", "") if ok else ""
+        row["llm_decision"] = record.get("decision", "") if ok else ""
+        row["llm_confidence"] = record.get("confidence", "") if ok else ""
+        row["llm_reasoning"] = record.get("reasoning", "") if ok else ""
 
 
 def render(rows: list[dict]) -> str:
@@ -92,6 +121,10 @@ def render(rows: list[dict]) -> str:
     padding: 12px; margin-bottom: 10px; }}
   .side .src {{ font-size: 12px; color: #a89e88; }}
   .reason {{ font-style: italic; color: #cfc7b4; margin: 12px 0; }}
+  .llm {{ background: #171b28; border: 1px solid #2c3444; border-radius: 6px;
+    padding: 10px 12px; margin: 0 0 12px; font-size: 13px; }}
+  .llm b {{ color: #7fb3e5; }}
+  .llm-reason {{ color: #a89e88; margin-top: 4px; }}
   .actions button {{ font-size: 14px; padding: 8px 16px; margin-right: 8px;
     border-radius: 6px; border: 1px solid #443c2c; background: #241f17;
     color: #e7e2d8; cursor: pointer; }}
@@ -117,6 +150,13 @@ def render(rows: list[dict]) -> str:
       <option value="organization|organization">organization &times; organization</option>
       <option value="mixed">mixed</option></select>
     <select id="sources"><option value="">Any source pair</option></select>
+    <select id="llm"><option value="">Any AI suggestion</option>
+      <option value="same">AI: same</option>
+      <option value="different">AI: different</option>
+      <option value="uncertain">AI: uncertain</option>
+      <option value="none">No AI suggestion</option></select>
+    <select id="sort"><option value="money">Sort: money (default)</option>
+      <option value="confidence">Sort: AI confidence</option></select>
     <button class="export" id="exportBtn">Export decisions</button>
   </div>
   <div class="count" id="count"></div>
@@ -154,14 +194,21 @@ function applyFilters() {{
   const kind = document.getElementById('kind').value;
   const types = document.getElementById('types').value;
   const sources = sourcesSel.value;
+  const llm = document.getElementById('llm').value;
+  const sort = document.getElementById('sort').value;
   filtered = ROWS.filter(r => {{
     if (kind && r.match_kind !== kind) return false;
     if (types && typeCombo(r) !== types) return false;
     if (sources && (r.left_source + ' / ' + r.right_source) !== sources) return false;
+    if (llm === 'none' && r.llm_decision) return false;
+    if (llm && llm !== 'none' && r.llm_decision !== llm) return false;
     if (q && !r.left_key.toUpperCase().includes(q) && !r.right_key.toUpperCase().includes(q)
         && !r.vendor_names.toUpperCase().includes(q) && !r.contributor_names.toUpperCase().includes(q)) return false;
     return true;
   }});
+  if (sort === 'confidence') {{
+    filtered = filtered.slice().sort((a, b) => (b.llm_confidence || -1) - (a.llm_confidence || -1));
+  }}
   renderList();
 }}
 
@@ -169,10 +216,12 @@ function renderList() {{
   const list = document.getElementById('list');
   list.innerHTML = filtered.map((r, i) => {{
     const isDecided = decided[keyOf(r)];
+    const llmBadge = r.llm_decision ?
+      ' &middot; AI: ' + esc(r.llm_decision) + ' ' + Number(r.llm_confidence).toFixed(2) : '';
     return '<div class="row' + (isDecided ? ' decided' : '') + '" data-i="' + i + '">' +
       '<div class="names">' + esc(r.vendor_names) + ' &harr; ' + esc(r.contributor_names) + '</div>' +
       '<div class="meta">' + r.left_source + ' / ' + r.right_source + ' &middot; ' +
-      r.match_kind + ' &middot; score ' + r.score.toFixed(2) +
+      r.match_kind + ' &middot; score ' + r.score.toFixed(2) + llmBadge +
       (isDecided ? ' &middot; <b>' + isDecided.decision + '</b>' : '') + '</div></div>';
   }}).join('');
   document.getElementById('count').textContent =
@@ -193,11 +242,16 @@ function renderDetail() {{
     (records ? '<div class="src">' + records + ' records, ' + money(total) + '</div>' : '') +
     '</div>';
   const existing = decided[keyOf(r)];
+  const llmBlock = r.llm_decision ?
+    '<div class="llm">Local model suggests (unverified): <b>' + esc(r.llm_decision).toUpperCase() +
+    '</b> &middot; confidence ' + Number(r.llm_confidence).toFixed(2) +
+    '<div class="llm-reason">' + esc(r.llm_reasoning) + '</div></div>' : '';
   detail.innerHTML =
     '<h2>' + r.match_kind + ' &middot; score ' + r.score.toFixed(2) + '</h2>' +
     side(r.vendor_names, r.left_source, r.left_cities, r.contract_records || r.contribution_records, r.contract_total || r.contribution_total) +
     side(r.contributor_names, r.right_source, r.right_cities, r.contribution_records, r.contribution_total) +
     '<div class="reason">' + esc(r.reason) + '</div>' +
+    llmBlock +
     (existing ? '<p><b>Decided this session: ' + existing.decision + '</b></p>' : '') +
     '<div class="actions">' +
     '<button class="same" id="btnSame">Same entity</button>' +
@@ -217,7 +271,16 @@ function selectRow(i) {{
 }}
 
 function decide(r, decision) {{
-  decided[keyOf(r)] = {{decision, note: ''}};
+  decided[keyOf(r)] = {{
+    decision, note: '',
+    // Captured at the moment of the click, not re-derived at export time --
+    // the LLM cache can be regenerated between a review session and an
+    // export, so this is the only way to guarantee the exported row
+    // reflects the suggestion the reviewer actually saw.
+    suggested_by: r.llm_model || '',
+    suggested_decision: r.llm_decision || '',
+    suggested_score: r.llm_decision ? r.llm_confidence : '',
+  }};
   localStorage.setItem('reviewDecisions', JSON.stringify(decided));
   renderList();
   advance();
@@ -235,12 +298,15 @@ document.getElementById('q').addEventListener('input', applyFilters);
 document.getElementById('kind').addEventListener('change', applyFilters);
 document.getElementById('types').addEventListener('change', applyFilters);
 sourcesSel.addEventListener('change', applyFilters);
+document.getElementById('llm').addEventListener('change', applyFilters);
+document.getElementById('sort').addEventListener('change', applyFilters);
 
 document.getElementById('exportBtn').addEventListener('click', () => {{
-  const rows = [['left_key', 'right_key', 'decision', 'note']];
+  const rows = [['left_key', 'right_key', 'decision', 'note', 'suggested_by', 'suggested_decision', 'suggested_score']];
   Object.entries(decided).forEach(([key, d]) => {{
     const [left_key, right_key] = key.split('\\u0000');
-    rows.push([left_key, right_key, d.decision, d.note || '']);
+    rows.push([left_key, right_key, d.decision, d.note || '',
+      d.suggested_by || '', d.suggested_decision || '', d.suggested_score ?? '']);
   }});
   const csv = rows.map(r => r.map(v => {{
     const s = String(v);

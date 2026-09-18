@@ -21,23 +21,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "resolve"))
 
-from resolutions import DIFFERENT, SAME, Ledger, Resolution  # noqa: E402
+from resolutions import DIFFERENT, SAME, Ledger, Resolution, validate_decided_by  # noqa: E402
 
 LEDGER_PATH = ROOT / "data" / "manual" / "resolutions.csv"
-
-# Anything that looks like a model name is rejected as a decision owner. The
-# ledger's whole value is that a person stands behind each row.
-MODEL_HINTS = ("gpt", "claude", "llm", "ai", "model", "bot", "auto")
 
 
 def record(left, right, decision, by, note="", suggested_by="", suggested_score="",
            ledger_path=None):
     path = Path(ledger_path or LEDGER_PATH)
-    if any(hint in by.lower() for hint in MODEL_HINTS):
-        raise ValueError(
-            f"--by must name a person, got {by!r}. A model may suggest "
-            "(--suggested-by), but only a human decides."
-        )
+    validate_decided_by(by)
     ledger = Ledger.load(path)
     ledger.add(
         Resolution(

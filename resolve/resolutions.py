@@ -6,20 +6,25 @@ recorded here, version-controlled, and **overrides the algorithm permanently**.
 Re-tuning the scorer never silently undoes a decision a person made.
 
 An LLM may suggest, but the ledger records what a HUMAN decided. The suggestion
-is kept alongside in `suggested_by`/`suggested_score`, so the provenance of a
-merge is never lost -- you can always ask "who decided this, and what did the
-machine think at the time?"
+is kept alongside in `suggested_by`/`suggested_decision`/`suggested_score`, so
+the provenance of a merge is never lost -- you can always ask "who decided
+this, and what did the machine think at the time?" `suggested_decision` is
+what the machine actually said (which can be "uncertain", or can disagree with
+`decision` -- a human overriding a suggestion is exactly the case this column
+exists to keep visible).
 
 Columns:
-    pair_id         stable id for the unordered pair of keys
-    left_key        normalized key, lexicographically first
-    right_key       normalized key, second
-    decision        same | different
-    decided_by      a person's name or handle -- never a model
-    decided_on      ISO date
-    suggested_by    what proposed it: "auto", "review", or a model name
-    suggested_score the score at the time of the decision
-    note            free text; why
+    pair_id             stable id for the unordered pair of keys
+    left_key            normalized key, lexicographically first
+    right_key           normalized key, second
+    decision            same | different
+    decided_by          a person's name or handle -- never a model
+    decided_on          ISO date
+    suggested_by        what proposed it: "auto", "review", or a model name
+    suggested_decision  what the suggestion actually said: same | different |
+                         uncertain -- may disagree with `decision`
+    suggested_score     the score/confidence at the time of the decision
+    note                free text; why
 """
 
 from __future__ import annotations
@@ -42,12 +47,30 @@ LEDGER_COLUMNS = [
     "decided_by",
     "decided_at",
     "suggested_by",
+    "suggested_decision",
     "suggested_score",
     "note",
 ]
 
 SAME = "same"
 DIFFERENT = "different"
+
+# Anything that looks like a model name is rejected as a decision owner. The
+# ledger's whole value is that a person stands behind each row. Checked only
+# at the two write paths (build/review.py, apply_review.py) -- never from
+# Resolution.__post_init__ or Ledger.load, which would make the ledger
+# refuse to load its own past decisions the moment a real person's name
+# happens to contain one of these substrings (e.g. Aiden, Botello).
+MODEL_HINTS = ("gpt", "claude", "llm", "ai", "model", "bot", "auto")
+
+
+def validate_decided_by(name: str) -> None:
+    """Raise ValueError if `name` looks like a model rather than a person."""
+    if any(hint in name.lower() for hint in MODEL_HINTS):
+        raise ValueError(
+            f"decided_by must name a person, got {name!r}. A model may "
+            "suggest (suggested_by), but only a human decides."
+        )
 
 
 def pair_id(left: str, right: str) -> str:
@@ -65,6 +88,7 @@ class Resolution:
     decided_by: str
     decided_on: str = ""
     suggested_by: str = ""
+    suggested_decision: str = ""
     suggested_score: str = ""
     note: str = ""
 
@@ -90,6 +114,7 @@ class Resolution:
             "decided_by": self.decided_by,
             "decided_at": self.decided_on,
             "suggested_by": self.suggested_by,
+            "suggested_decision": self.suggested_decision,
             "suggested_score": self.suggested_score,
             "note": self.note,
         }
@@ -141,6 +166,7 @@ class Ledger:
                 decided_by=r["decided_by"],
                 decided_on=r.get("decided_at", ""),
                 suggested_by=r.get("suggested_by", ""),
+                suggested_decision=r.get("suggested_decision", ""),
                 suggested_score=r.get("suggested_score", ""),
                 note=r.get("note", ""),
             )

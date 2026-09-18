@@ -7,7 +7,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "build"))
 
 from index import TokenIndex, candidate_pairs  # noqa: E402
 from match import match_pair, score_pair  # noqa: E402
-from resolutions import DIFFERENT, SAME, Ledger, Resolution, UnionFind, pair_id  # noqa: E402
+from resolutions import (  # noqa: E402
+    DIFFERENT,
+    SAME,
+    Ledger,
+    Resolution,
+    UnionFind,
+    pair_id,
+    validate_decided_by,
+)
 from review import record  # noqa: E402
 
 # The names under test, plus filler. Filler is not padding: document
@@ -162,6 +170,36 @@ def test_ledger_survives_a_round_trip(tmp_path):
     reloaded = Ledger.load(path)
     assert len(reloaded) == 1
     assert reloaded.decision_for("A KEY", "B KEY") == SAME
+
+
+def test_validate_decided_by_rejects_model_like_names():
+    for name in ("claude", "gpt-4", "some-llm", "autobot"):
+        with pytest.raises(ValueError, match="must name a person"):
+            validate_decided_by(name)
+
+
+def test_validate_decided_by_accepts_a_person():
+    validate_decided_by("jdiep")  # does not raise
+
+
+def test_suggested_decision_round_trips(tmp_path):
+    """The LLM's actual verdict is kept even when a human overrides it --
+    otherwise 'model said different, human overrode' and 'model said same,
+    human agreed' would look identical in the ledger."""
+    path = tmp_path / "resolutions.csv"
+    ledger = Ledger([
+        Resolution(
+            left_key="A KEY", right_key="B KEY", decision=SAME, decided_by="jdiep",
+            suggested_by="llama3.1:8b-instruct-q4_K_M",
+            suggested_decision="different",
+            suggested_score="0.62",
+        )
+    ])
+    ledger.save(path)
+    reloaded = Ledger.load(path)
+    row = reloaded._by_pair[pair_id("A KEY", "B KEY")]
+    assert row.suggested_decision == "different"
+    assert row.decision == SAME  # the human's call, not the model's
 
 
 def test_review_cli_refuses_a_model_as_decider(tmp_path):

@@ -563,11 +563,71 @@ JS in this project.
 
 ---
 
+## LLM-suggested review decisions (local Ollama), done 2026-09-17
+
+Direct follow-on: the review-queue tool above made 14,656 pairs *reviewable*,
+but 14,656 is still a lot for one person. `resolve/llm_suggest.py` asks a
+local model (Ollama, `llama3.1:8b-instruct-q4_K_M` -- free, already running
+on the user's machine, already used for `ne-contracts`' AI summaries, no new
+API key) about each pair and caches its answer
+(`pipeline/llm_suggestions.jsonl`, gitignored, same sensitivity class as
+`pipeline/review.html`). `build/build_review_tool.py` shows a cached
+suggestion in the detail view, labeled unverified, never pre-selecting a
+button -- CLAUDE.md rule 4 stands unchanged, a human still clicks. New
+filter/sort in the review page (by suggested decision, by confidence) is the
+actual answer to "too many to review": pull up "AI says same, high
+confidence" and blitz through agreement cases first.
+
+Prior art found and fixed along the way, not just new code: `build/review.py`
+has had a `MODEL_HINTS` guard against a model-like `--by` since the project's
+first commit; `resolve/apply_review.py` (built last session) didn't have it
+and has been pushed without it -- moved into a shared
+`resolutions.validate_decided_by()`, used by both write paths now. A human
+overriding a suggestion needed its own column (`suggested_decision`) --
+`suggested_by`/`suggested_score` alone couldn't tell "model said different,
+human overrode" apart from "model said same, human agreed."
+
+`CLAUDE.md` gained the "Where the LLM is allowed" section this whole feature
+needed -- `PLAN.md`'s Phase 4 (below) already referenced it and a
+`data/llm_log/`-style convention before either existed; both are real now,
+not aspirational, and `resolve/llm_suggest.py`'s `prompt_hash` field is the
+first working instance of that convention.
+
+Tests: `tests/test_llm_suggest.py` (new) covers prompt building, response
+parsing/validation with an injectable fake model call (never touches the
+network, matching this project's `pytest tests/  # no network` invariant),
+and the checkpoint's append-only/last-entry-wins/truncate-on-crash recovery;
+`tests/test_resolution.py` covers `validate_decided_by` and
+`suggested_decision`'s round-trip; `tests/test_apply_review.py` covers real
+per-row provenance passthrough and confirms the pre-existing `suggested_by
+== "review"` fallback test still passes unmodified.
+
+**Live-benchmarked against the real queue, same day.** 40 real `organization`-
+slice pairs run against Ollama on this machine: 20 at `--workers 2` (0.14/s,
+143s, 0 errors), 20 more at `--workers 4` (0.18/s, 113s, 0 errors) -- compute-
+bound local inference, so concurrency past 2 workers buys only ~28%, not a
+linear speedup; `DEFAULT_WORKERS` raised from the original unbenchmarked 2 to
+4, the plateau actually measured. Sample reasoning was legible and
+appropriately cautious (e.g. flagging a shared token but differing city as
+"uncertain" rather than guessing same). At the 4-worker rate, the full
+14,656-pair queue is roughly **22-23 hours of wall-clock, local compute** --
+worth stating plainly since "a few seconds per pair" undersells it: this is a
+job to leave running across a weekend, not an overnight one. A real bug was
+also caught and fixed running this: a worker-crash record (raised before
+`suggest_pair` builds its own return dict) had no `pair_id`, which would have
+`KeyError`ed `load_checkpoint` on the very next run, defeating the whole
+resume-on-crash design; fixed by carrying `pair_id`/`left_key`/`right_key`
+through from the source row in `main()`'s crash handler.
+
+---
+
 ## Phase 4 — Bill summarizer (`ne-bills/`)
 
 Not blocked by, and doesn't block, anything else — sequenced here mostly
-because it's the first place `CLAUDE.md`'s LLM rules get exercised for real
-rather than just specified. Enrichment on existing lobbying records, not a
+because it's the first *generative* case CLAUDE.md's "Where the LLM is
+allowed" rules (now real, see above, not just specified) get exercised
+against, rather than the suggest-only case those rules were written for.
+Enrichment on existing lobbying records, not a
 fourth pillar of the co-occurrence model: bills aren't organizations, so this
 adds no new source bit.
 

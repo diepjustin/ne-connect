@@ -40,6 +40,43 @@ writes prose for readers.
    scraper's raw capture after the fact; cleaning happens downstream into that
    repo's processed output, which this repo reads read-only.
 
+## Where the LLM is allowed
+
+`PLAN.md`'s bill-summarizer phase and `docs/ENTITY_RESOLUTION.md` both
+already assumed this section existed before it did — `resolve/llm_suggest.py`
+(review-queue suggestions) is the first real LLM integration in this repo,
+so this consolidates what was previously scattered across a few docstrings
+into one place to point future work at.
+
+1. **A model may suggest; only a human decides.** `decided_by` in
+   `data/manual/resolutions.csv` must never be a model — enforced by
+   `resolve/resolutions.py`'s `validate_decided_by()` at every write path
+   (`build/review.py`, `resolve/apply_review.py`). What the model actually
+   said is kept alongside, never in place of, the human's own decision:
+   `suggested_by` (which model), `suggested_decision` (what it said — may
+   disagree with `decision`), `suggested_score` (its confidence). A human
+   overriding a suggestion is not an edge case to paper over; it is exactly
+   the case this provenance trio exists to keep visible.
+2. **Nothing an LLM produces reaches a decision file directly.** Its output
+   goes to a local cache or proposals file that a review UI reads — never a
+   write straight into `resolutions.csv` or any other decision-of-record
+   artifact — and stays labeled machine-generated/unverified everywhere it's
+   shown.
+3. **An LLM-touched artifact that embeds raw source data stays local and
+   gitignored**, same rule as `pipeline/review.html` itself: it holds the
+   same unreviewed, potentially-sensitive candidate data the queue does, and
+   `index.html`'s GitHub-Pages-from-repo-root publishing means anything
+   committed is anything published.
+4. **Rule 3 applies to model output too.** A suggestion's reasoning never
+   characterizes a match as improper, suspicious, illegal, or corrupt — it
+   only judges whether two records describe the same real-world entity.
+5. **Treat model calls with the same restraint rule 6 asks of scrapers.**
+   Cache aggressively; never redundantly re-ask about something already
+   answered. A local model still costs real wall-clock time and (for a
+   paid API) real money — a starved cache that silently skips retrying a
+   failure is worse than a slow one, so a prior error is retried, not
+   treated as done.
+
 ## Architecture
 
 Federated, not a monorepo. Each source is its own sibling GitHub repo — clone
@@ -57,7 +94,8 @@ ne-connect/             this repo -- the hub, read-only over the above
   resolve/    normalize.py, index.py (blocking/IDF), match.py (scoring),
               authority.py (source-id short-circuit), resolutions.py (the
               human decision ledger), apply_review.py (merges a review
-              session's decisions into the ledger)
+              session's decisions into the ledger), llm_suggest.py
+              (optional: local-Ollama suggestions for the review queue)
   build/      build_entities.py (the resolution pipeline -> canonical_entities.csv)
               build_site.py (index.html + d/entities.json)
               build_review_tool.py (pipeline/review.html, below)
@@ -65,7 +103,8 @@ ne-connect/             this repo -- the hub, read-only over the above
   index.html  the published page, at the repo root because that's the served path
   d/          the lazily-fetched full search index
   pipeline/   gitignored, local-only tools -- never committed, never published
-              (currently: review.html, the review-queue reviewer)
+              (review.html, the review-queue reviewer; llm_suggestions.jsonl,
+              resolve/llm_suggest.py's suggestion cache)
 ```
 
 Runtime: each sibling scrapes on its own GitHub Actions cadence and publishes its
