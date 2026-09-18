@@ -107,11 +107,14 @@ ne-connect/             this repo -- the hub, read-only over the above
               resolve/llm_suggest.py's suggestion cache)
 ```
 
-Runtime: each sibling scrapes on its own GitHub Actions cadence and publishes its
-processed CSVs (`ne-*-daily.yml` / weekly, per `PLAN.md` Phase 4). This repo's own
-nightly workflow (`ne-connect-nightly.yml`, once it lands) restores those outputs,
-rebuilds `canonical_entities.csv` and `index.html`, and publishes via GitHub Pages.
-No server, no database, no build step beyond the two Python scripts above.
+Runtime: each sibling scrapes on its own GitHub Actions cadence and publishes a
+data release for the hub (`gh release create` at the end of its own publish leg --
+Actions caches are repo-scoped and can't cross this boundary, so a release is what
+does). This repo's own nightly workflow (`ne-connect-nightly.yml`) downloads each
+sibling's latest release, rebuilds `canonical_entities.csv` and `index.html`, and
+deploys via a GitHub Pages artifact (`actions/upload-pages-artifact` +
+`actions/deploy-pages` -- not a git commit, see `PLAN.md`'s Automation notes for
+why). No server, no database, no build step beyond the two Python scripts above.
 
 ## Conventions
 

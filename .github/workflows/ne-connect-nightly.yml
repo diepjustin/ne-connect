@@ -1,0 +1,252 @@
+name: NE Connect nightly rebuild
+
+on:
+  schedule:
+    # Both fire every night; the gate step lets through only the entry
+    # matching the current UTC offset, so exactly one does anything on any
+    # given night. Two entries exist because GitHub Actions cron is UTC-only
+    # with no DST awareness -- see ne-lobbying's daily.yml for the incident
+    # that made gating on the fired cron entry (not the wall clock) the rule.
+    # Timed after the latest sibling's own publish window (campaign-finance's
+    # daily run is 04:00/10:00 UTC) plus a slip buffer.
+    - cron: '0 11 * * *'   # 6am Central during CDT (UTC-5, 11:00 UTC)
+    - cron: '0 12 * * *'   # 6am Central during CST (UTC-6, 12:00 UTC)
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and verify, but do not deploy.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  actions: write   # for `gh cache delete` cleanup
+
+# Never two deploys at once, and never cancel one half-done -- an interrupted
+# deployment leaves the site on its previous artifact, which is fine, but a
+# cancelled build wastes the run that made the payload. Same reasoning as
+# ne-contracts/pages.yml's identical concurrency group.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      proceed: ${{ steps.gate.outputs.proceed }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: ne-connect
+
+      - name: Pick the DST-correct cron entry (push/dispatch always proceed)
+        id: gate
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          offset=$(TZ=America/Chicago date +%z)
+          case "$offset" in
+            -0500) want='0 11 * * *' ;;   # CDT
+            -0600) want='0 12 * * *' ;;   # CST
+            *)     want='' ;;
+          esac
+
+          # github.event.schedule is empty on a push or workflow_dispatch
+          # event, so without this branch the DST check below would
+          # incorrectly skip every non-scheduled run.
+          if [ "$EVENT" != 'schedule' ]; then
+            proceed=true
+          elif [ -n "$want" ] && [ "$SCHEDULE" = "$want" ]; then
+            proceed=true
+          else
+            proceed=false
+            echo "Central offset is $offset, so today's real run is cron '$want'; this run came from '$SCHEDULE'. Skipping."
+          fi
+
+          echo "proceed=$proceed" >> "$GITHUB_OUTPUT"
+          echo "event=$EVENT offset=$offset -> proceed=$proceed"
+
+      - uses: actions/setup-python@v6
+        if: steps.gate.outputs.proceed == 'true'
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        if: steps.gate.outputs.proceed == 'true'
+        run: pip install -r ne-connect/requirements.txt
+
+      - name: Tests
+        if: steps.gate.outputs.proceed == 'true'
+        run: python3 -m pytest ne-connect/tests -q
+
+      # Reproduces the sibling-directory layout ingest/sources.py's REPO_ROOT
+      # expects on a dev machine (ne-connect checked out one level down from
+      # $GITHUB_WORKSPACE, siblings as direct children of it).
+      - name: Make sibling data directories
+        if: steps.gate.outputs.proceed == 'true'
+        run: |
+          mkdir -p ne-contracts/data
+          mkdir -p ne-campaign-finance/data/processed
+          mkdir -p ne-lobbying/data
+          mkdir -p ne-fec/data
+
+      # Each sibling now publishes a data release (see ne-connect's PLAN.md).
+      # A plain repo checkout would only get the tracked skeleton -- every
+      # file here is gitignored in its own repo -- and an Actions cache can't
+      # cross repo boundaries, so a release is the only thing that does.
+      # Missing/failed release: warn and continue with whatever's already
+      # there rather than failing the whole nightly -- CLAUDE.md's "state
+      # what you have, honestly" rule, not "refuse to build unless every
+      # source is fresh". build/verify_payload.py is the guard against an
+      # actually-empty build, not this step.
+      - name: Download ne-contracts' latest data release
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release list --repo diepjustin/ne-contracts --json tagName \
+                  --jq '[.[] | select(.tagName | startswith("ne-contracts-hub-data-"))] | sort_by(.tagName) | last | .tagName')
+          if [ -z "$tag" ]; then
+            echo "::warning::no ne-contracts-hub-data-* release found -- building without contracts data"
+          else
+            echo "using release $tag"
+            gh release download "$tag" --repo diepjustin/ne-contracts --pattern '*.gz' --dir ne-contracts/data --clobber
+            for f in ne-contracts/data/*.gz; do gunzip -f "$f"; done
+            ls -la ne-contracts/data
+          fi
+
+      - name: Download ne-campaign-finance's latest data release
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release list --repo diepjustin/ne-campaign-finance --json tagName \
+                  --jq '[.[] | select(.tagName | startswith("ne-campaign-finance-data-"))] | sort_by(.tagName) | last | .tagName')
+          if [ -z "$tag" ]; then
+            echo "::warning::no ne-campaign-finance-data-* release found -- building without campaign finance data"
+          else
+            echo "using release $tag"
+            gh release download "$tag" --repo diepjustin/ne-campaign-finance --pattern '*.gz' --dir ne-campaign-finance/data/processed --clobber
+            for f in ne-campaign-finance/data/processed/*.gz; do gunzip -f "$f"; done
+            ls -la ne-campaign-finance/data/processed
+          fi
+
+      - name: Download ne-lobbying's latest data release
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release list --repo diepjustin/ne-lobbying --json tagName \
+                  --jq '[.[] | select(.tagName | startswith("lobbying-data-"))] | sort_by(.tagName) | last | .tagName')
+          if [ -z "$tag" ]; then
+            echo "::warning::no lobbying-data-* release found -- building without lobbying data"
+          else
+            echo "using release $tag"
+            gh release download "$tag" --repo diepjustin/ne-lobbying --pattern '*.gz' --dir ne-lobbying/data --clobber
+            for f in ne-lobbying/data/*.gz; do gunzip -f "$f"; done
+            ls -la ne-lobbying/data
+          fi
+
+      - name: Download ne-fec's latest data release
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release list --repo diepjustin/ne-fec --json tagName \
+                  --jq '[.[] | select(.tagName | startswith("ne-fec-data-"))] | sort_by(.tagName) | last | .tagName')
+          if [ -z "$tag" ]; then
+            echo "::warning::no ne-fec-data-* release found -- building without FEC data"
+          else
+            echo "using release $tag"
+            gh release download "$tag" --repo diepjustin/ne-fec --pattern '*.gz' --dir ne-fec/data --clobber
+            for f in ne-fec/data/*.gz; do gunzip -f "$f"; done
+            ls -la ne-fec/data
+          fi
+
+      # Best effort: verify_payload.py's before/after comparison degrades to
+      # "no previous summary" (its floor check alone) on a cache miss --
+      # this repo's own data/, unlike the cross-repo case above.
+      - name: Restore the previous run's entities_summary.json
+        if: steps.gate.outputs.proceed == 'true'
+        uses: actions/cache/restore@v5
+        with:
+          path: ne-connect/data/.previous_entities_summary.json
+          key: ne-connect-summary-${{ github.run_id }}
+          restore-keys: |
+            ne-connect-summary-
+
+      - name: Build canonical entities
+        if: steps.gate.outputs.proceed == 'true'
+        run: cd ne-connect && python3 build/build_entities.py
+
+      - name: Build the site
+        if: steps.gate.outputs.proceed == 'true'
+        run: cd ne-connect && python3 build/build_site.py
+
+      - name: Verify the build isn't empty or broken
+        if: steps.gate.outputs.proceed == 'true'
+        run: cd ne-connect && python3 build/verify_payload.py --previous data/.previous_entities_summary.json
+
+      - name: Save today's summary for tomorrow's comparison
+        if: always() && steps.gate.outputs.proceed == 'true'
+        run: cp ne-connect/data/entities_summary.json ne-connect/data/.previous_entities_summary.json
+
+      - uses: actions/cache/save@v5
+        if: always() && steps.gate.outputs.proceed == 'true'
+        with:
+          path: ne-connect/data/.previous_entities_summary.json
+          key: ne-connect-summary-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Delete old summary cache entries (keep newest 3)
+        if: always() && steps.gate.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list --key ne-connect-summary- --json id,createdAt --limit 100 \
+            | jq -r 'sort_by(.createdAt) | reverse | .[3:] | .[].id' \
+            | xargs -r -n1 gh cache delete
+
+      # Copying rather than uploading the checkout directly is deliberate:
+      # data/ and pipeline/ hold gigabytes-scale local build intermediates
+      # and the gitignored review-queue tool respectively, neither of which
+      # belongs on the site -- same reasoning as ne-contracts/pages.yml's own
+      # staging step.
+      - name: Stage the site
+        if: steps.gate.outputs.proceed == 'true'
+        run: |
+          mkdir -p _site
+          rsync -a ne-connect/ _site/ \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude '_site' \
+            --exclude 'data' \
+            --exclude 'venv' \
+            --exclude 'pipeline' \
+            --exclude '**/__pycache__' \
+            --exclude '.pytest_cache'
+          test -f _site/index.html
+          test -f _site/d/entities.json
+          echo "staged $(du -sh _site | cut -f1)"
+
+      - uses: actions/upload-pages-artifact@v5
+        if: steps.gate.outputs.proceed == 'true'
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.proceed == 'true' && github.event.inputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

@@ -285,12 +285,15 @@ their own repos, READMEs and caveats, and each publishes clean tables. `ne-conne
 the per-source caveats — which are where most of the journalism value lives — stay
 attached to the data they describe instead of being flattened into one hub.
 
-**Publishing:** `index.html` and `d/entities.json` are committed directly (see "Why
-the payload is split the way it is" above) and served by GitHub Pages from the repo
-root — no CI build step for the payload itself, since the sibling projects' data
-isn't in this repo's git history for a workflow to rebuild from. `ne-connect-nightly.yml`
-(planned, `PLAN.md` 0.14) restores each sibling's published output and reruns the two
-build scripts, then commits the result.
+**Publishing:** historically `index.html` and `d/entities.json` were committed
+directly and served by GitHub Pages from the repo root. As of `ne-connect-nightly.yml`
+(built, see `PLAN.md`'s Automation notes) that's no longer the live mechanism:
+each sibling now publishes a data release (Actions caches are repo-scoped and can't
+cross the boundary a release can), the nightly workflow downloads the latest of
+each, reruns the two build scripts, and deploys the result as a GitHub Pages
+artifact — never a commit, since `d/fec_rows.json` alone is already 50MB and
+GitHub hard-rejects any file over 100MB. The previously-committed copies remain
+in the tree for now as a local-dev fallback, not the source the live site serves.
 
 **Connections panel:** per canonical entity, a list of (source, role, count, $ total,
 date range); entities in ≥2 sources get a badge; row expansion shows every alias and

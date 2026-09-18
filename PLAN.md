@@ -676,21 +676,53 @@ pattern actually looks like before estimating 4.2/4.3.
 3. `actions/cache/restore@v5` keyed `<prefix>-${{ github.run_id }}`, `restore-keys: <prefix>-`, `fail-on-cache-miss: true` for baselines (`:119-130`).
 4. Release fallback: `gh release list … | sort_by(.tagName) | last`, then `gh release download`.
 5. Guard rails fail the job before publish.
-6. Sunday-or-`force_publish` dispatches `gh workflow run pages.yml` (`:182-188`).
+6. Every night that scrapes also publishes (`ne-contracts/daily.yml` dropped the old Sunday-only gate; see its own comments for why six days of avoidable staleness wasn't worth it) — dispatches `gh workflow run pages.yml`.
 7. "Worth caching" check before `cache/save`, save `if: always()`, prune to newest 3 (`:196-224`).
 8. `concurrency: cancel-in-progress: false`.
 
-**Hub workflow `ne-connect-nightly.yml`** (lands in Phase 1.6):
-- The ne-contracts cache is 2.4 GB+ but the hub needs three CSVs (~365 MB). Add a step to `ne-contracts-daily.yml` that saves a slim `ne-contracts-hub-` cache containing only `nu_contracts.csv`, `nu_purchase_orders.csv`, `state_agencies.csv`, `scrape_meta.json`. The hub restores that, plus `ne-campaign-finance-data-`, `ne-lobbying-data-` (release fallback), later `ne-sos-data-`, `ne-fec-data-`.
-- Tests → `build_entities.py` → `build_site.py` → new `build/verify_payload.py` (entity count within 10% of previous summary, every expected source bit present, `entities.json` header matches rows) → save `ne-connect-payload-<hash of build/**, resolve/**, ingest/**, data/manual/**>-<run_id>` with `index.html`, `d/`, `entities_summary.json` → Sunday dispatch `pages.yml`.
-- After a week green: stop committing `ne-connect/index.html` and `d/entities.json` (`.gitignore`), and upload `ne-connect-payload-<date>` releases (~1 MB gz) as the cold-start fallback.
-- `pages.yml`: add "Restore the hub payload" cache/restore with release fallback; stage assertions `test -f _site/ne-connect/index.html`, `test -f _site/ne-connect/d/entities.json`, entity count > 70,000; `--exclude 'ne-*/data' --exclude 'ne-*/venv'` on the rsync.
+**Hub workflow `ne-connect-nightly.yml` — done 2026-09-17.** The design above
+(cross-repo `actions/cache` restore) doesn't work: Actions caches are
+strictly repo-scoped, a workflow running in `ne-connect` can never restore a
+cache saved by a workflow in `ne-contracts`. What actually shipped, checked
+against the real mechanism rather than assumed:
+
+- **Releases, not caches, cross the repo boundary** — the only thing that
+  does (`ne-lobbying`'s own monthly backup already proved this, this just
+  generalizes it). `ne-contracts/daily.yml`, `ne-campaign-finance/daily.yml`,
+  and `ne-fec/ne-fec-weekly.yml` each gained a "Publish a data release for
+  ne-connect" step (gzip the processed CSVs, `gh release create` a dated
+  tag, prune to newest 3) at the end of their existing publish leg.
+  `ne-lobbying` needed no change — its existing monthly release already does
+  this — kept on that cadence rather than moved to nightly, an explicit
+  choice (smaller change to an already-working pipeline; the hub states
+  staleness honestly either way via `retrieval_dates()`).
+- `ne-connect-nightly.yml`: one workflow, two jobs (`build`, `deploy`) — not
+  a `daily.yml`/`pages.yml` split, since the hub has no scrape of its own to
+  separate from a fast rebuild; downloads each sibling's latest release
+  (warn-and-continue on a miss, never a hard failure — a stale source is not
+  the same failure as an empty build) → `build_entities.py` → `build_site.py`
+  → new `build/verify_payload.py` (entity count above an absolute floor and
+  within 10% of the previous run's cached summary, no source's key-count
+  silently dropping to zero, `d/entities.json`'s rows matching its own
+  header) → stage `_site/` → `actions/upload-pages-artifact@v5` →
+  `actions/deploy-pages@v5`.
+- **Publish via Pages artifact, not git-commit** — `d/fec_rows.json` is
+  already 50MB (measured directly) and GitHub hard-rejects any file over
+  100MB; committing it nightly was a collision course, the exact problem
+  `ne-contracts/pages.yml` already solved this same way. `ne-connect`'s
+  GitHub Pages source needed switching from "Deploy from a branch" to
+  "GitHub Actions" (`gh api -X PUT repos/.../pages -f build_type=workflow`)
+  as an explicit, sequenced, one-time step — never something a workflow run
+  does to itself. The previously-committed `index.html`/`d/*.json` on `main`
+  are left in the tree for now (not `.gitignore`'d yet); that's a follow-up
+  once the new pipeline has run green nightly for about a week, same
+  reasoning `ne-contracts` used for its own transition.
+- `tests/test_workflows.py` and `build/verify_payload.py`'s own unit tests
+  cover this (see Definition of done below).
 
 **Rate-limit budget:** contracts nightly (existing); campaign finance minutes; lobbying nightly ~40 min, weekly ~4 h; SoS ≤ 20 min weekly; FEC download-bound weekly; hub ~5 min. No two scrapers share a host in the same window.
 
-**Workflow tests:** `tests/test_workflows.py` at repo root parses each YAML for the invariants (two crons, gate step, `cancel-in-progress: false`, every save guarded, `fail-on-cache-miss` on baselines). `verify_payload.py` unit tests.
-
-**Risk:** Actions cache eviction (7 days unused / 10 GB). Release fallbacks are what make the design safe; add each before relying on its cache.
+**Risk:** a sibling's release step failing silently would leave the hub building on an ever-staler copy with no loud signal. `verify_payload.py` catches an *empty* build; it does not (yet) alert on a release that's merely gone stale for days — worth watching once this has run for a while, not solved here.
 
 ---
 
