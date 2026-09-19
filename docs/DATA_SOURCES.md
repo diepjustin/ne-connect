@@ -244,6 +244,20 @@ redistributing any of it.**
   and creditors. Cross-referenced against contracts, it is the sharpest edge in this
   whole tool.
 - **Handle with care:** see `docs/PRIVACY.md`.
+- **Not yet in automated daily collection (`PLAN.md` item 1.6):**
+  `scrape_c1.py` is deliberately not wired into
+  `ne-campaign-finance-daily.yml` yet, so a fresh checkout (a CI runner that
+  only has that repo's automated release, not a manual local run) can be
+  missing `c1_filings.csv`/`financial_interests.csv` entirely.
+  `ne-connect`'s `build_entities.py` and `build_site.py` both already handle
+  that cleanly (`load_disclosure_filers()` returns `{}` rather than
+  erroring), but a naive read of `entities_summary.json`'s
+  `disclosure_filer_keys: 0` would misread as "no Nebraska official has
+  filed anything." `build_site.py`'s `retrieval_dates()` sets an
+  always-on-while-the-gap-exists `disclosures_note` (same dict, same
+  gating style as `fec_note` above) whenever `c1_filings.csv` is
+  missing or header-only, and `render()` surfaces it in the footer
+  disclaimer paragraph next to `lobbying_coverage()`'s own coverage note.
 
 ---
 

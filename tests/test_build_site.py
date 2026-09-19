@@ -241,3 +241,56 @@ def test_retrieval_dates_ignores_non_dataset_shaped_keys(tmp_path, monkeypatch):
     dates = retrieval_dates()
 
     assert dates["campaign_finance"] == "2026-09-09"
+
+
+def test_retrieval_dates_notes_missing_disclosures_file(tmp_path, monkeypatch):
+    """c1_filings.csv doesn't exist yet -- scrape_c1.py is not wired into
+    ne-campaign-finance's daily automation (PLAN.md item 1.6). The page must
+    say so rather than let disclosure_filer_keys: 0 read as nobody in
+    Nebraska having filed a disclosure."""
+    root = tmp_path / "ne-connect"
+    root.mkdir()
+    monkeypatch.setattr(build_site, "ROOT", root)
+
+    dates = retrieval_dates()
+
+    assert "disclosures" not in dates
+    assert "disclosures_note" in dates
+    assert "not been collected" in dates["disclosures_note"]
+
+
+def test_retrieval_dates_notes_header_only_disclosures_file(tmp_path, monkeypatch):
+    """A c1_filings.csv that exists but has zero data rows is the same
+    coverage gap as a missing file entirely, not a clean zero -- both leave
+    dates["disclosures"] falsy, and the note is gated on that, not on
+    file-existence alone."""
+    root = tmp_path / "ne-connect"
+    root.mkdir()
+    finance_dir = tmp_path / "ne-campaign-finance" / "data" / "processed"
+    finance_dir.mkdir(parents=True)
+    (finance_dir / "c1_filings.csv").write_text(
+        "disclosure_id,filer_name_raw,document_url,retrieved_at\n"
+    )
+    monkeypatch.setattr(build_site, "ROOT", root)
+
+    dates = retrieval_dates()
+
+    assert dates["disclosures"] == ""
+    assert "disclosures_note" in dates
+
+
+def test_retrieval_dates_no_disclosures_note_once_filings_exist(tmp_path, monkeypatch):
+    root = tmp_path / "ne-connect"
+    root.mkdir()
+    finance_dir = tmp_path / "ne-campaign-finance" / "data" / "processed"
+    finance_dir.mkdir(parents=True)
+    (finance_dir / "c1_filings.csv").write_text(
+        "disclosure_id,filer_name_raw,document_url,retrieved_at\n"
+        "1,DOE JANE,https://example.gov/1,2026-09-10\n"
+    )
+    monkeypatch.setattr(build_site, "ROOT", root)
+
+    dates = retrieval_dates()
+
+    assert dates["disclosures"] == "2026-09-10"
+    assert "disclosures_note" not in dates

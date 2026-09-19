@@ -404,6 +404,16 @@ incremental mode yet, and an unbounded nightly sweep of a live financial-
 disclosure site needs that logic and a cadence decision first, not a
 silent overnight default. `ne-connect-nightly.yml` not started — bigger
 scope (touches live Pages publishing), held for explicit sign-off.
+**Gap closed 2026-09-19 while verifying `ne-connect-nightly.yml`:** a nightly
+rebuild that runs against a checkout missing `scrape_c1.py`'s output (the
+normal state until this item's cron wiring lands) produced
+`entities_summary.json`'s `disclosure_filer_keys: 0` with nothing on the
+published page saying why. `ne-connect/build/build_site.py`'s
+`retrieval_dates()` now sets a `disclosures_note` whenever
+`c1_filings.csv` is missing or header-only (see `docs/DATA_SOURCES.md`'s
+C-1 section), surfaced in the footer next to `lobbying_coverage()`'s own
+note. This does not close 1.6 itself — `scrape_c1.py` is still not in the
+cron — it only makes the hub honest about that fact until it is.
 Risks: rtf schema quality; legacy committee ids not joinable to modern; OCR quality on C-1 scans; `d/rows.json` size (measure; split by first letter if over ~5 MB).
 Effort: 8-11 days (legacy 3-4, search page 2, C-1 3-5).
 

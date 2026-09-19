@@ -282,7 +282,7 @@
   is a stronger claim than the rest.</p>
   <p>No analytics, no tracking, no external fonts, and nothing loads from a third
   party — searching a name here does not send it anywhere.</p>
-  <p>Built 2026-09-17 from <code>data/canonical_entities.csv</code>.
+  <p>Built 2026-09-19 from <code>data/canonical_entities.csv</code>.
   Method, caveats and open work are in the
   <a href="https://github.com/diepjustin/diepjustin.github.io/tree/main/ne-connect">project README</a>.</p>
 </footer>
@@ -423,7 +423,14 @@ function render(rows, pool) {
   // all) -- always fall back to the empty dossier state on re-render.
   resetDossier();
   if (!rows.length) {
-    list.innerHTML = '<p class="hint">No entity matches that search.</p>';
+    // The disclosures pill can only ever show this -- see RETRIEVED.disclosures_note
+    // (build_site.py's retrieval_dates()): when the source is missing entirely,
+    // no entity anywhere carries the disclosures bit, so filtering to it always
+    // empties the list. Say why, rather than a bare "no matches" that reads as
+    // "nobody in Nebraska has disclosed anything."
+    const gapNote = (currentFilter === 'disclosures' && RETRIEVED.disclosures_note)
+      ? ' ' + esc(RETRIEVED.disclosures_note) : '';
+    list.innerHTML = '<p class="hint">No entity matches that search.' + gapNote + '</p>';
     return;
   }
   list.innerHTML = rows.map((e, idx) => {

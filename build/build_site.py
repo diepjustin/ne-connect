@@ -146,6 +146,24 @@ def retrieval_dates():
         with c1_filings.open(encoding="utf-8", newline="") as fh:
             stamps = [row["retrieved_at"] for row in csv.DictReader(fh) if row.get("retrieved_at")]
         dates["disclosures"] = max(stamps) if stamps else ""
+    # scrape_c1.py is deliberately not wired into ne-campaign-finance's daily
+    # automation yet (PLAN.md item 1.6, a separate not-yet-built phase), so a
+    # missing or header-only c1_filings.csv is the normal state today, not a
+    # scraper failure. Without this, build_entities.py's disclosure_filer_keys:
+    # 0 and this page's empty "Financial Disclosures" figures would look
+    # exactly like "nobody in Nebraska has disclosed anything," which is not
+    # what a zero here means. Fires whenever dates["disclosures"] came out
+    # falsy above -- the key missing entirely (no file) or "" (file exists
+    # but has no data rows) are the same gap, one check.
+    if not dates.get("disclosures"):
+        dates["disclosures_note"] = (
+            "Financial disclosures (C-1/C-2 statements of financial "
+            "interest) have not been collected yet -- the scraper that "
+            "pulls them has not been wired into this project's automated "
+            "runs. A name missing from this record set has not been "
+            "checked against it, which is not the same as having nothing "
+            "to disclose."
+        )
 
     fec_meta = ROOT.parent / "ne-fec" / "data" / "scrape_meta.json"
     if fec_meta.exists():
@@ -418,6 +436,15 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
             f"session {', '.join(coverage['sessions'])}). "
             "Completing the sweep would add entities and connections, not remove them."
         )
+
+    # Same reasoning as coverage_note immediately above: retrieval_dates()
+    # already detected that c1_filings.csv is missing/empty; say so in the
+    # same disclaimer paragraph rather than letting the page's zero
+    # disclosure figures pass as silence (CLAUDE.md: "reporters need to know
+    # what they are looking at is stale").
+    disclosures_note = ""
+    if retrieved.get("disclosures_note"):
+        disclosures_note = f" {retrieved['disclosures_note']}"
 
     # Dedupe by (url, label): disclosures shares ne-campaign-finance's project
     # link (same repo, different pipeline) rather than getting its own, so a
@@ -699,7 +726,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
   rows carry no dollar value at all, so an organization showing no contract total
   may still hold contracts. Contributions cover 2022–2026 only, the years
   Nebraska's current e-filing system spans, while contract records reach back
-  further: the two halves of a row describe different periods.{coverage_note}</p>
+  further: the two halves of a row describe different periods.{coverage_note}{disclosures_note}</p>
   <p>Lobbying figures, where a dollar amount is shown, are a principal's own
   reported total from Form C &mdash; compensation, reimbursement, entertainment,
   lodging, travel, gifts and admissions &mdash; not audited spending. Form B,
@@ -855,7 +882,14 @@ function render(rows, pool) {{
   // all) -- always fall back to the empty dossier state on re-render.
   resetDossier();
   if (!rows.length) {{
-    list.innerHTML = '<p class="hint">No entity matches that search.</p>';
+    // The disclosures pill can only ever show this -- see RETRIEVED.disclosures_note
+    // (build_site.py's retrieval_dates()): when the source is missing entirely,
+    // no entity anywhere carries the disclosures bit, so filtering to it always
+    // empties the list. Say why, rather than a bare "no matches" that reads as
+    // "nobody in Nebraska has disclosed anything."
+    const gapNote = (currentFilter === 'disclosures' && RETRIEVED.disclosures_note)
+      ? ' ' + esc(RETRIEVED.disclosures_note) : '';
+    list.innerHTML = '<p class="hint">No entity matches that search.' + gapNote + '</p>';
     return;
   }}
   list.innerHTML = rows.map((e, idx) => {{
