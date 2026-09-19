@@ -82,9 +82,15 @@ jobs:
         if: steps.gate.outputs.proceed == 'true'
         run: pip install -r ne-connect/requirements.txt
 
+      # cd, not a path-prefixed target: tests/test_normalize.py does
+      # `from resolve.normalize import ...`, which needs ne-connect/ itself
+      # on sys.path[0] -- `python -m pytest` adds the CWD, not the target
+      # path's directory, so `python3 -m pytest ne-connect/tests` from the
+      # workspace root fails with "No module named 'resolve'" (caught by
+      # this workflow's own first real dry-run).
       - name: Tests
         if: steps.gate.outputs.proceed == 'true'
-        run: python3 -m pytest ne-connect/tests -q
+        run: cd ne-connect && python3 -m pytest tests -q
 
       # Reproduces the sibling-directory layout ingest/sources.py's REPO_ROOT
       # expects on a dev machine (ne-connect checked out one level down from
