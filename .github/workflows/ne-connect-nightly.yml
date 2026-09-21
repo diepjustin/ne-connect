@@ -126,6 +126,7 @@ jobs:
         run: |
           tag=$(gh release list --repo diepjustin/ne-contracts --json tagName \
                   --jq '[.[] | select(.tagName | startswith("ne-contracts-hub-data-"))] | sort_by(.tagName) | last | .tagName')
+          case "$tag" in *[!A-Za-z0-9._-]*) echo "::warning::ignoring oddly named release tag '$tag'"; tag="" ;; esac
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           if [ -z "$tag" ]; then
             echo "::warning::no ne-contracts-hub-data-* release found -- building without contracts data"
@@ -144,6 +145,7 @@ jobs:
         run: |
           tag=$(gh release list --repo diepjustin/ne-campaign-finance --json tagName \
                   --jq '[.[] | select(.tagName | startswith("ne-campaign-finance-data-"))] | sort_by(.tagName) | last | .tagName')
+          case "$tag" in *[!A-Za-z0-9._-]*) echo "::warning::ignoring oddly named release tag '$tag'"; tag="" ;; esac
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           if [ -z "$tag" ]; then
             echo "::warning::no ne-campaign-finance-data-* release found -- building without campaign finance data"
@@ -162,6 +164,7 @@ jobs:
         run: |
           tag=$(gh release list --repo diepjustin/ne-lobbying --json tagName \
                   --jq '[.[] | select(.tagName | startswith("lobbying-data-"))] | sort_by(.tagName) | last | .tagName')
+          case "$tag" in *[!A-Za-z0-9._-]*) echo "::warning::ignoring oddly named release tag '$tag'"; tag="" ;; esac
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           if [ -z "$tag" ]; then
             echo "::warning::no lobbying-data-* release found -- building without lobbying data"
@@ -180,6 +183,7 @@ jobs:
         run: |
           tag=$(gh release list --repo diepjustin/ne-fec --json tagName \
                   --jq '[.[] | select(.tagName | startswith("ne-fec-data-"))] | sort_by(.tagName) | last | .tagName')
+          case "$tag" in *[!A-Za-z0-9._-]*) echo "::warning::ignoring oddly named release tag '$tag'"; tag="" ;; esac
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           if [ -z "$tag" ]; then
             echo "::warning::no ne-fec-data-* release found -- building without FEC data"
@@ -289,10 +293,19 @@ jobs:
         with:
           python-version: '3.11'
 
+      # Tags come in through env, never interpolated into the script: a
+      # `${{ }}` inside `run:` is expanded by the expression engine before
+      # the shell sees it, so a release tag containing `"` or `$(` in a
+      # sibling repo would execute here. Env values are plain data.
       - name: Check no sibling release has gone stale
+        env:
+          CONTRACTS_TAG: ${{ needs.build.outputs.contracts_tag }}
+          CAMPAIGN_FINANCE_TAG: ${{ needs.build.outputs.campaign_finance_tag }}
+          LOBBYING_TAG: ${{ needs.build.outputs.lobbying_tag }}
+          FEC_TAG: ${{ needs.build.outputs.fec_tag }}
         run: |
           python3 build/check_freshness.py \
-            --tag "contracts=${{ needs.build.outputs.contracts_tag }}" \
-            --tag "campaign_finance=${{ needs.build.outputs.campaign_finance_tag }}" \
-            --tag "lobbying=${{ needs.build.outputs.lobbying_tag }}" \
-            --tag "fec=${{ needs.build.outputs.fec_tag }}"
+            --tag "contracts=$CONTRACTS_TAG" \
+            --tag "campaign_finance=$CAMPAIGN_FINANCE_TAG" \
+            --tag "lobbying=$LOBBYING_TAG" \
+            --tag "fec=$FEC_TAG"

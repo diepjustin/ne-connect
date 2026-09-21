@@ -78,7 +78,12 @@ def test_freshness_job_runs_after_build_but_never_gates_deploy():
     jobs = workflow["jobs"]
     assert jobs["freshness"]["needs"] == "build"
     assert jobs["deploy"]["needs"] == "build"
-    assert "check_freshness.py" in jobs["freshness"]["steps"][-1]["run"]
+    check_step = jobs["freshness"]["steps"][-1]
+    assert "check_freshness.py" in check_step["run"]
+    # Tags reach the shell as env vars, never as `${{ }}` expanded into the
+    # script -- a sibling's release tag may legally contain `"` or `$(`.
+    assert "${{" not in check_step["run"]
+    assert set(check_step["env"]) == {"CONTRACTS_TAG", "CAMPAIGN_FINANCE_TAG", "LOBBYING_TAG", "FEC_TAG"}
 
 
 def test_every_download_step_exports_its_release_tag_for_the_freshness_job():
@@ -88,5 +93,6 @@ def test_every_download_step_exports_its_release_tag_for_the_freshness_job():
     assert {s["id"] for s in download_steps} == {"dl_contracts", "dl_campaign_finance", "dl_lobbying", "dl_fec"}
     for step in download_steps:
         assert 'echo "tag=$tag" >> "$GITHUB_OUTPUT"' in step["run"]
+        assert "*[!A-Za-z0-9._-]*" in step["run"]  # oddly named tag -> dropped, not exported
     for source in ("contracts", "campaign_finance", "lobbying", "fec"):
         assert f"steps.dl_{source}.outputs.tag" in build["outputs"][f"{source}_tag"]
