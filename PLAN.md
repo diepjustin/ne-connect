@@ -723,7 +723,19 @@ against the real mechanism rather than assumed:
   GitHub Pages source needed switching from "Deploy from a branch" to
   "GitHub Actions" (`gh api -X PUT repos/.../pages -f build_type=workflow`)
   as an explicit, sequenced, one-time step — never something a workflow run
-  does to itself. The previously-committed `index.html`/`d/*.json` on `main`
+  does to itself. **Done 2026-09-20.** One finding from the transition, worth
+  keeping: `actions/deploy-pages` does *not* fail against a legacy-configured
+  Pages source — it deploys and GitHub serves the artifact regardless of what
+  the settings API reports. The sequencing above assumed the deploy would
+  fail red until the switch, so the first `push`-triggered run (2026-09-19
+  07:01 UTC) went live before the FEC two-cycle fix had landed, and for about
+  seven hours the site carried one FEC cycle (13,572 contributor keys instead
+  of 29,125). Until the switch the legacy branch build and the artifact
+  deploy raced on every push (legacy first, ~7 minutes later the artifact).
+  The `build_type` setting is a preference, not a guard: if a deploy must not
+  happen, gate the `deploy` job on an explicit condition (the `dry_run` input
+  does this) or leave the `push` trigger off. The previously-committed
+  `index.html`/`d/*.json` on `main`
   are left in the tree for now (not `.gitignore`'d yet); that's a follow-up
   once the new pipeline has run green nightly for about a week, same
   reasoning `ne-contracts` used for its own transition.
