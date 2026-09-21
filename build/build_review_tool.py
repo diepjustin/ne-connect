@@ -131,6 +131,9 @@ def render(rows: list[dict]) -> str:
   .actions button.same {{ border-color: #4a8a5c; }}
   .actions button.diff {{ border-color: #b3486b; }}
   .actions button:hover {{ filter: brightness(1.2); }}
+  .actions kbd {{ font: 11px/1 -apple-system, sans-serif; border: 1px solid #443c2c;
+    border-radius: 3px; padding: 2px 4px; background: #17140f; }}
+  .shortcuts {{ font-size: 12px; color: #a89e88; margin-top: 8px; }}
   .export {{ margin-left: auto; }}
   a {{ color: #e5a83a; }}
 </style>
@@ -257,6 +260,8 @@ function renderDetail() {{
     '<button class="same" id="btnSame">Same entity</button>' +
     '<button class="diff" id="btnDiff">Different entities</button>' +
     '<button id="btnSkip">Skip</button>' +
+    '<div class="shortcuts"><kbd>S</kbd> same &middot; <kbd>D</kbd> different &middot; ' +
+    '<kbd>X</kbd> skip &middot; <kbd>&uarr;</kbd>/<kbd>&darr;</kbd> or <kbd>K</kbd>/<kbd>J</kbd> browse</div>' +
     '</div>';
   document.getElementById('btnSame').addEventListener('click', () => decide(r, 'same'));
   document.getElementById('btnDiff').addEventListener('click', () => decide(r, 'different'));
@@ -300,6 +305,34 @@ document.getElementById('types').addEventListener('change', applyFilters);
 sourcesSel.addEventListener('change', applyFilters);
 document.getElementById('llm').addEventListener('change', applyFilters);
 document.getElementById('sort').addEventListener('change', applyFilters);
+
+// Keyboard shortcuts: S/D/X mirror the three action buttons -- routed through
+// their own click handlers, not decide()/advance() directly, so there's one
+// place that knows how a decision gets made. Up/down (or J/K, vim-style)
+// move the list selection without deciding, for browsing before committing.
+// Ignored while a filter input/select has focus so typing a name or "same"
+// in the search box doesn't fire a shortcut.
+document.addEventListener('keydown', (e) => {{
+  const tag = (document.activeElement && document.activeElement.tagName) || '';
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const key = e.key.toLowerCase();
+  if (key === 's') {{ document.getElementById('btnSame')?.click(); e.preventDefault(); }}
+  else if (key === 'd') {{ document.getElementById('btnDiff')?.click(); e.preventDefault(); }}
+  else if (key === 'x') {{ document.getElementById('btnSkip')?.click(); e.preventDefault(); }}
+  else if (key === 'j' || key === 'arrowdown') {{
+    if (!filtered.length) return;
+    e.preventDefault();
+    selectRow(selected === null ? 0 : Math.min(selected + 1, filtered.length - 1));
+    document.getElementById('list').children[selected]?.scrollIntoView({{block: 'nearest'}});
+  }}
+  else if (key === 'k' || key === 'arrowup') {{
+    if (!filtered.length) return;
+    e.preventDefault();
+    selectRow(selected === null ? 0 : Math.max(selected - 1, 0));
+    document.getElementById('list').children[selected]?.scrollIntoView({{block: 'nearest'}});
+  }}
+}});
 
 document.getElementById('exportBtn').addEventListener('click', () => {{
   const rows = [['left_key', 'right_key', 'decision', 'note', 'suggested_by', 'suggested_decision', 'suggested_score']];
