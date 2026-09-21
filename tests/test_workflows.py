@@ -68,3 +68,25 @@ def test_pages_permissions_present_for_artifact_deploy():
     permissions = workflow["permissions"]
     assert permissions["pages"] == "write"
     assert permissions["id-token"] == "write"
+
+
+def test_freshness_job_runs_after_build_but_never_gates_deploy():
+    """A stale sibling must go red without freezing the site: three fresh
+    sources still ship. So `deploy` depends on `build` alone, and the
+    freshness check is a separate job that can fail on its own."""
+    workflow = _load()
+    jobs = workflow["jobs"]
+    assert jobs["freshness"]["needs"] == "build"
+    assert jobs["deploy"]["needs"] == "build"
+    assert "check_freshness.py" in jobs["freshness"]["steps"][-1]["run"]
+
+
+def test_every_download_step_exports_its_release_tag_for_the_freshness_job():
+    workflow = _load()
+    build = workflow["jobs"]["build"]
+    download_steps = [s for s in build["steps"] if s.get("id", "").startswith("dl_")]
+    assert {s["id"] for s in download_steps} == {"dl_contracts", "dl_campaign_finance", "dl_lobbying", "dl_fec"}
+    for step in download_steps:
+        assert 'echo "tag=$tag" >> "$GITHUB_OUTPUT"' in step["run"]
+    for source in ("contracts", "campaign_finance", "lobbying", "fec"):
+        assert f"steps.dl_{source}.outputs.tag" in build["outputs"][f"{source}_tag"]

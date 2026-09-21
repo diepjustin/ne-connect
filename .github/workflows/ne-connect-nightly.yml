@@ -40,6 +40,12 @@ jobs:
     timeout-minutes: 30
     outputs:
       proceed: ${{ steps.gate.outputs.proceed }}
+      # Which release each sibling's download step actually used, for the
+      # freshness job below. Empty when none was found.
+      contracts_tag: ${{ steps.dl_contracts.outputs.tag }}
+      campaign_finance_tag: ${{ steps.dl_campaign_finance.outputs.tag }}
+      lobbying_tag: ${{ steps.dl_lobbying.outputs.tag }}
+      fec_tag: ${{ steps.dl_fec.outputs.tag }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -113,12 +119,14 @@ jobs:
       # source is fresh". build/verify_payload.py is the guard against an
       # actually-empty build, not this step.
       - name: Download ne-contracts' latest data release
+        id: dl_contracts
         if: steps.gate.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag=$(gh release list --repo diepjustin/ne-contracts --json tagName \
                   --jq '[.[] | select(.tagName | startswith("ne-contracts-hub-data-"))] | sort_by(.tagName) | last | .tagName')
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           if [ -z "$tag" ]; then
             echo "::warning::no ne-contracts-hub-data-* release found -- building without contracts data"
           else
@@ -129,12 +137,14 @@ jobs:
           fi
 
       - name: Download ne-campaign-finance's latest data release
+        id: dl_campaign_finance
         if: steps.gate.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag=$(gh release list --repo diepjustin/ne-campaign-finance --json tagName \
                   --jq '[.[] | select(.tagName | startswith("ne-campaign-finance-data-"))] | sort_by(.tagName) | last | .tagName')
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           if [ -z "$tag" ]; then
             echo "::warning::no ne-campaign-finance-data-* release found -- building without campaign finance data"
           else
@@ -145,12 +155,14 @@ jobs:
           fi
 
       - name: Download ne-lobbying's latest data release
+        id: dl_lobbying
         if: steps.gate.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag=$(gh release list --repo diepjustin/ne-lobbying --json tagName \
                   --jq '[.[] | select(.tagName | startswith("lobbying-data-"))] | sort_by(.tagName) | last | .tagName')
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           if [ -z "$tag" ]; then
             echo "::warning::no lobbying-data-* release found -- building without lobbying data"
           else
@@ -161,12 +173,14 @@ jobs:
           fi
 
       - name: Download ne-fec's latest data release
+        id: dl_fec
         if: steps.gate.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag=$(gh release list --repo diepjustin/ne-fec --json tagName \
                   --jq '[.[] | select(.tagName | startswith("ne-fec-data-"))] | sort_by(.tagName) | last | .tagName')
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           if [ -z "$tag" ]; then
             echo "::warning::no ne-fec-data-* release found -- building without FEC data"
           else
@@ -256,3 +270,29 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v5
+
+  # The operator's alarm for a sibling that has quietly stopped publishing.
+  # Deliberately its own job, not a step in `build`: a failing step there
+  # would block `deploy` and freeze the site on the last artifact even
+  # though three of four sources are fresh -- and the page already states
+  # every source's retrieval date honestly. This job going red is the loud
+  # signal; `deploy` only needs `build` and ships regardless.
+  freshness:
+    needs: build
+    if: needs.build.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Check no sibling release has gone stale
+        run: |
+          python3 build/check_freshness.py \
+            --tag "contracts=${{ needs.build.outputs.contracts_tag }}" \
+            --tag "campaign_finance=${{ needs.build.outputs.campaign_finance_tag }}" \
+            --tag "lobbying=${{ needs.build.outputs.lobbying_tag }}" \
+            --tag "fec=${{ needs.build.outputs.fec_tag }}"

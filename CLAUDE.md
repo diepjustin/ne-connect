@@ -147,4 +147,7 @@ A sibling scraper failing does not mean this repo should silently build on stale
 data without saying so. `build_site.py`'s `retrieval_dates()` and
 `lobbying_coverage()` exist so the page states what it actually has and when it
 was last captured — extend that pattern rather than adding a separate status
-mechanism. Reporters need to know what they are looking at is stale.
+mechanism. Reporters need to know what they are looking at is stale. The
+operator's side of the same rule is `build/check_freshness.py`: the nightly's
+`freshness` job goes red when a sibling's newest release is older than its
+cadence allows, without blocking the deploy of the sources that are fresh.

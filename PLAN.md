@@ -745,7 +745,7 @@ against the real mechanism rather than assumed:
 
 **Rate-limit budget:** contracts nightly (existing); campaign finance minutes; lobbying nightly ~40 min, weekly ~4 h; SoS ≤ 20 min weekly; FEC download-bound weekly; hub ~5 min. No two scrapers share a host in the same window.
 
-**Risk:** a sibling's release step failing silently would leave the hub building on an ever-staler copy with no loud signal. `verify_payload.py` catches an *empty* build; it does not (yet) alert on a release that's merely gone stale for days — worth watching once this has run for a while, not solved here.
+**Risk, closed 2026-09-20:** a sibling's release step failing silently would leave the hub building on an ever-staler copy with no loud signal. `verify_payload.py` catches an *empty* build; `build/check_freshness.py` now catches the *stale* one — each download step exports the release tag it used, and a separate `freshness` job dates each tag by its `YYYY-MM-DD` suffix against that sibling's cadence (dailies: warn >3 days, fail >7; FEC weekly: 10/21; lobbying monthly: 40/70). It is its own job on purpose: `deploy` needs only `build`, so a stale source turns the run red without freezing the site for the three fresh ones — the page's own retrieval dates already tell readers what they're looking at.
 
 ---
 
