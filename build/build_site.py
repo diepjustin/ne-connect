@@ -1019,17 +1019,20 @@ function openDossier(idx) {{
     '<div class="dossier-name">' + esc(e.name) + '</div>' +
     '<div class="badges">' + badges + '</div>' +
     '<div class="figs">' + figures(e) + '</div>' +
-    '<div class="detail">' +
-    '<h4>Why these records are grouped</h4>' + conf +
-    '<h4>Name variants folded into this entity</h4>' + aliases +
-    '<h4>Where each figure comes from</h4>' + prov +
-    // Above the itemized tables on purpose -- those can run to hundreds of
-    // scrollable rows, and the button got lost below them (real feedback:
-    // a reporter scrolled past a long table and never found it).
+    // Right after the headline figures, before any explanatory section --
+    // real feedback moved this below the itemized tables once already
+    // (2026-09-15), but it was still three h4 sections deep inside the
+    // scrollable .dossier panel and got missed again (2026-09-21: "no
+    // download option on the live site"). Top of the panel, not buried in
+    // it, is the only placement that has actually held up.
     // PRIVACY: per-entity export only, per docs/PRIVACY.md rule 4 ("Per-search
     // CSV export is fine. A 'download all 240,000 contributors' button is
     // not.") -- never add a site-wide or filtered-list export button.
     '<button class="dl-btn" type="button">Download this entity as CSV</button>' +
+    '<div class="detail">' +
+    '<h4>Why these records are grouped</h4>' + conf +
+    '<h4>Name variants folded into this entity</h4>' + aliases +
+    '<h4>Where each figure comes from</h4>' + prov +
     txnsSlot + spendSlot + posSlot + discSlot + contractsSlot + fecSlot +
     '</div>';
   dossier.classList.add('show');
