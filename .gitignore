@@ -13,6 +13,14 @@ data/manual/*
 
 venv/
 
+# Claude Code local-only state: this machine's session lock, its worktrees,
+# and settings.local.json (permission choices made in this session). Not
+# .claude/launch.json or .claude/settings.json -- those are project config
+# worth sharing if this repo ever commits them.
+.claude/settings.local.json
+.claude/worktrees/
+.claude/*.lock
+
 # The published page and its lazily-fetched index. Built by build_site.py
 # (and build/export_fec.py for fec_rows.json), deployed by
 # ne-connect-nightly.yml as a Pages artifact -- not served from this tree
