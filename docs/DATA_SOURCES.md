@@ -244,20 +244,22 @@ redistributing any of it.**
   and creditors. Cross-referenced against contracts, it is the sharpest edge in this
   whole tool.
 - **Handle with care:** see `docs/PRIVACY.md`.
-- **Not yet in automated daily collection (`PLAN.md` item 1.6):**
-  `scrape_c1.py` is deliberately not wired into
-  `ne-campaign-finance-daily.yml` yet, so a fresh checkout (a CI runner that
-  only has that repo's automated release, not a manual local run) can be
-  missing `c1_filings.csv`/`financial_interests.csv` entirely.
-  `ne-connect`'s `build_entities.py` and `build_site.py` both already handle
-  that cleanly (`load_disclosure_filers()` returns `{}` rather than
-  erroring), but a naive read of `entities_summary.json`'s
-  `disclosure_filer_keys: 0` would misread as "no Nebraska official has
-  filed anything." `build_site.py`'s `retrieval_dates()` sets an
-  always-on-while-the-gap-exists `disclosures_note` (same dict, same
-  gating style as `fec_note` above) whenever `c1_filings.csv` is
-  missing or header-only, and `render()` surfaces it in the footer
-  disclaimer paragraph next to `lobbying_coverage()`'s own coverage note.
+- **Automated collection since 2026-09-20 (`PLAN.md` item 1.6):**
+  `ne-campaign-finance/daily.yml` runs `scrape_c1.py --new-only` on Sundays
+  (or on a dispatch with `c1=true`): the two newest filing years are
+  re-swept, older years come from the page cache, and each row's
+  `retrieved_at` is the day its page was really fetched, not the run date.
+  Measured at 50 rows a page: 3,006 filings / 64 requests / ~10 min for one
+  filing year, so ~20 min a week. Weekly rather than nightly because
+  filings arrive in bursts around deadlines and a week's lag is fine for
+  an index; 7x fewer requests against a live state site. Only the filer
+  index (`c1_filings.csv`) is automated -- the PDF/OCR pipeline
+  (`build_financial_interests.py`) stays a manual, local run.
+  `build_site.py`'s `retrieval_dates()` still sets a `disclosures_note`
+  (same dict, same gating style as `fec_note` above) whenever
+  `c1_filings.csv` is missing or header-only, so a build that somehow runs
+  without the release says so in the footer rather than reading as "no
+  Nebraska official has filed anything."
 
 ---
 

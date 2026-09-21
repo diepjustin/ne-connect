@@ -414,6 +414,21 @@ published page saying why. `ne-connect/build/build_site.py`'s
 C-1 section), surfaced in the footer next to `lobbying_coverage()`'s own
 note. This does not close 1.6 itself — `scrape_c1.py` is still not in the
 cron — it only makes the hub honest about that fact until it is.
+**Closed 2026-09-20:** `scrape_c1.py --new-only` runs in
+`ne-campaign-finance/daily.yml` on Sundays (or a dispatch with `c1=true`),
+re-sweeping the two newest filing years and serving older ones from the
+page cache, each row stamped with the date its page was really fetched.
+Three things learned building it: the grid's page-size dropdown goes to
+50 and a postback costs ~11s of server time at any size, so a year is 5x
+fewer requests at 50 (2025 measured: 3,006 filings / 64 requests / 10
+min); about 1 in 25 live rows is a name-and-year shell with no filing
+behind it, which the parser skips on purpose; and weekly beat nightly on
+politeness alone (7x fewer requests) for data that arrives in deadline
+bursts. Only the filer index is automated — the PDF/OCR pipeline stays
+manual. Not done: the 2018–2022-07-11 overlap with `nadc_data.zip`'s
+`formc1.txt` is still deduped by nobody (this scraper leaves it to the
+caller; `load_disclosure_filers()` doesn't do it either), which becomes
+visible now that CI populates those years.
 Risks: rtf schema quality; legacy committee ids not joinable to modern; OCR quality on C-1 scans; `d/rows.json` size (measure; split by first letter if over ~5 MB).
 Effort: 8-11 days (legacy 3-4, search page 2, C-1 3-5).
 
