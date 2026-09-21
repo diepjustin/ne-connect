@@ -230,7 +230,7 @@ ne-connect/
   resolve/               # normalize.py, index.py, match.py, authority.py, resolutions.csv
   build/                 # build_entities.py, build_site.py, review.py, report.py
   data/                  # gitignored; rebuilt from the sibling projects
-  index.html             # the published page (committed)
+  index.html             # the published page (built; gitignored, see Publishing)
 ```
 
 ### Running it
@@ -260,10 +260,10 @@ named column without touching the JS that reads it — see `build_full_index()` 
 - `d/entities.json` holds all 79,351, fetched the first time someone searches
   (3.61 MB raw, comfortably under the 4 MB budget `PLAN.md` 0.6 set).
 
-Both files are committed directly rather than built in CI, because ne-connect
-derives from three sibling projects whose data is not in git — CI has nothing to
-rebuild it from. Each is one file, so a rebuild produces one delta rather than
-thousands.
+Both files were originally committed directly rather than built in CI, because
+ne-connect derives from sibling projects whose data is not in git — CI had
+nothing to rebuild it from. The siblings' data releases changed that; see
+**Publishing** below.
 
 Chunking `d/entities.json` further was considered and measured away: the raw size
 is about what the page already weighed, and a three-character prefix scheme would
@@ -271,8 +271,7 @@ have produced thousands of files to save nothing.
 
 `build_site.py` embeds the 928 cross-source entities and their aliases inline —
 against `ne-contracts`' 6.85 MB page, because this project publishes *entities*
-rather than the millions of transactions behind them. Small enough that
-`index.html` is committed directly and needs no CI artifact.
+rather than the millions of transactions behind them.
 
 The page prints the pending-review and human-decision counts beside the entity count
 rather than in a footnote. Every figure on it comes from a machine match that **no
@@ -292,8 +291,8 @@ each sibling now publishes a data release (Actions caches are repo-scoped and ca
 cross the boundary a release can), the nightly workflow downloads the latest of
 each, reruns the two build scripts, and deploys the result as a GitHub Pages
 artifact — never a commit, since `d/fec_rows.json` alone is already 50MB and
-GitHub hard-rejects any file over 100MB. The previously-committed copies remain
-in the tree for now as a local-dev fallback, not the source the live site serves.
+GitHub hard-rejects any file over 100MB. Since 2026-09-20 neither `index.html`
+nor `d/` is tracked at all; `build_site.py` regenerates both locally in seconds.
 
 **Connections panel:** per canonical entity, a list of (source, role, count, $ total,
 date range); entities in ≥2 sources get a badge; row expansion shows every alias and

@@ -65,8 +65,9 @@ into one place to point future work at.
 3. **An LLM-touched artifact that embeds raw source data stays local and
    gitignored**, same rule as `pipeline/review.html` itself: it holds the
    same unreviewed, potentially-sensitive candidate data the queue does, and
-   `index.html`'s GitHub-Pages-from-repo-root publishing means anything
-   committed is anything published.
+   `ne-connect-nightly.yml` stages the whole checkout as the Pages artifact
+   (minus its rsync excludes), so anything committed and not excluded there
+   is published.
 4. **Rule 3 applies to model output too.** A suggestion's reasoning never
    characterizes a match as improper, suspicious, illegal, or corrupt — it
    only judges whether two records describe the same real-world entity.
@@ -100,8 +101,10 @@ ne-connect/             this repo -- the hub, read-only over the above
               build_site.py (index.html + d/entities.json)
               build_review_tool.py (pipeline/review.html, below)
   data/       rebuilt from the pipeline; only data/manual/ is version-controlled
-  index.html  the published page, at the repo root because that's the served path
-  d/          the lazily-fetched full search index
+  index.html  the published page, at the repo root because that's the served
+              path -- gitignored since 2026-09-20: the nightly builds and
+              deploys it as a Pages artifact, the tree no longer serves it
+  d/          the lazily-fetched full search index (gitignored, same reason)
   pipeline/   gitignored, local-only tools -- never committed, never published
               (review.html, the review-queue reviewer; llm_suggestions.jsonl,
               resolve/llm_suggest.py's suggestion cache)

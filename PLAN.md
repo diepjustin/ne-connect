@@ -735,10 +735,11 @@ against the real mechanism rather than assumed:
   The `build_type` setting is a preference, not a guard: if a deploy must not
   happen, gate the `deploy` job on an explicit condition (the `dry_run` input
   does this) or leave the `push` trigger off. The previously-committed
-  `index.html`/`d/*.json` on `main`
-  are left in the tree for now (not `.gitignore`'d yet); that's a follow-up
-  once the new pipeline has run green nightly for about a week, same
-  reasoning `ne-contracts` used for its own transition.
+  `index.html`/`d/*.json` on `main` were meant to stay in the tree until the
+  new pipeline had run green nightly for about a week; with four green runs
+  and the live site already serving the artifact, they were `git rm
+  --cached`'d and `.gitignore`'d on 2026-09-20 instead (both build scripts
+  create `d/` themselves, so a fresh CI checkout doesn't need it).
 - `tests/test_workflows.py` and `build/verify_payload.py`'s own unit tests
   cover this (see Definition of done below).
 

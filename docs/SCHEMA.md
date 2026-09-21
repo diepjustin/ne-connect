@@ -111,8 +111,9 @@ way to record a decision. `build/build_review_tool.py` reads
 self-contained HTML+CSS+JS page (no framework, no external request, same
 convention as `index.html`'s own embedded payload) — filterable by
 `match_kind`, entity-type combo, and source pair. **This must never be
-committed**: `index.html` is served from the repo root by GitHub Pages, so a
-committed `pipeline/` would publish the entire *unreviewed* candidate list —
+committed**: `ne-connect-nightly.yml` stages the whole checkout as the Pages
+artifact (its rsync excludes `pipeline/`, a second guard), so a committed
+`pipeline/` would be one exclude away from publishing the entire *unreviewed* candidate list —
 every individual x individual name-collision guess — right alongside the
 finished site. `.gitignore`'s `pipeline/` entry is the enforcement; this
 paragraph is the reason not to remove it.
