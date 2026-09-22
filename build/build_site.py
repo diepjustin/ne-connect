@@ -498,11 +498,13 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
   }}
   a {{ color: var(--accent); }}
   a:hover {{ color: var(--text); }}
-  header {{ padding: 40px 20px 0; max-width: 1180px; margin: 0 auto; }}
-  .kicker {{
-    font: 600 11.5px/1 inherit; letter-spacing: .12em; text-transform: uppercase;
-    color: var(--accent); margin: 0 0 14px;
-  }}
+  ::selection {{ background: var(--accent); color: #fff; }}
+  :focus-visible {{ outline: 2px solid var(--accent); outline-offset: 2px; }}
+  ::-webkit-scrollbar {{ width: 10px; height: 10px; }}
+  ::-webkit-scrollbar-track {{ background: transparent; }}
+  ::-webkit-scrollbar-thumb {{ background: var(--border); border-radius: 6px; }}
+  ::-webkit-scrollbar-thumb:hover {{ background: var(--muted); }}
+  header {{ padding: 40px 20px 22px; max-width: 1180px; margin: 0 auto; }}
   h1 {{
     font: 600 34px/1.15 var(--serif); margin: 0 0 14px; letter-spacing: -.01em;
     max-width: 15ch;
@@ -532,9 +534,19 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
     display: block; margin-top: 4px; font-size: 11px; letter-spacing: .04em;
     text-transform: uppercase; color: var(--muted);
   }}
+  /* Sticky search bar, 2026-09-21 -- search and filters are the primary
+     task and previously sat below the legend/warning/stats block, which
+     pushed them a full mobile viewport or more out of reach. Pinning this
+     bar keeps the task reachable at any scroll position without hiding or
+     shrinking the disclaimer/stats content below it -- that content still
+     renders at full size in .context, just after the controls now. */
+  .search-bar {{
+    position: sticky; top: 0; z-index: 40; background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }}
   .controls {{
-    max-width: 1180px; margin: 0 auto; padding: 0 20px;
-    display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin-bottom: 8px;
+    max-width: 1180px; margin: 0 auto; padding: 14px 20px 10px;
+    display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center;
   }}
   .search {{ position: relative; flex: 1 1 320px; }}
   .search svg {{ position: absolute; left: 11px; top: 50%; transform: translateY(-50%); opacity: .5; pointer-events: none; }}
@@ -543,26 +555,36 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
     border: 1px solid var(--border); border-radius: 4px; background: var(--panel);
     color: var(--text);
   }}
-  input[type=search]:focus {{ outline: 2px solid var(--accent); outline-offset: 1px; }}
+  input[type=search]:focus-visible {{ outline: 2px solid var(--accent); outline-offset: 1px; }}
   .pills {{ display: flex; flex-wrap: wrap; gap: 6px; }}
   .pill {{
     font: 500 12.5px/1 inherit; padding: 7px 12px; border: 1px solid var(--border);
     border-radius: 20px; background: transparent; color: var(--muted); cursor: pointer;
+    transition: background-color .15s ease, color .15s ease, border-color .15s ease;
   }}
+  .pill:hover {{ border-color: var(--muted); color: var(--text); }}
   .pill.active {{ background: var(--text); color: var(--bg); border-color: var(--text); }}
   .pill-contracts.active {{ background: var(--contracts); border-color: var(--contracts); color: #fff; }}
   .pill-campaign_finance.active {{ background: var(--finance); border-color: var(--finance); color: #fff; }}
   .pill-lobbying.active {{ background: var(--lobbying); border-color: var(--lobbying); color: #fff; }}
   .pill-disclosures.active {{ background: var(--disclosures); border-color: var(--disclosures); color: #fff; }}
   .pill-fec.active {{ background: var(--fec); border-color: var(--fec); color: #fff; }}
-  #count {{ color: var(--muted); font-size: 12.5px; max-width: 1180px; margin: 10px auto 4px; padding: 0 20px; }}
+  #count {{
+    color: var(--muted); font-size: 12.5px; max-width: 1180px; margin: 0 auto;
+    padding: 0 20px 12px;
+  }}
+  .context {{ max-width: 1180px; margin: 0 auto; padding: 20px 20px 0; }}
   .layout {{
     max-width: 1180px; margin: 0 auto; padding: 0 20px 60px;
     display: flex; gap: 24px; align-items: flex-start;
   }}
   #list {{ flex: 1 1 480px; min-width: 0; }}
-  .entity {{ border-bottom: 1px solid var(--border); padding: 16px 4px; cursor: pointer; }}
-  .entity:hover {{ background: var(--panel); }}
+  .entity {{
+    border-bottom: 1px solid var(--border); padding: 16px 28px 16px 4px; cursor: pointer;
+    transition: background-color .15s ease, box-shadow .15s ease; position: relative;
+  }}
+  .entity:hover {{ background: var(--panel); box-shadow: 0 1px 3px rgba(0,0,0,.06); }}
+  .entity:focus-visible {{ outline: 2px solid var(--accent); outline-offset: -2px; background: var(--panel); }}
   .entity.selected {{ background: var(--panel); box-shadow: inset 3px 0 0 var(--accent); }}
   .etop {{ display: flex; align-items: baseline; gap: 12px; }}
   .ename {{ font: 600 17px/1.3 var(--serif); flex: 1 1 240px; }}
@@ -576,16 +598,28 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
     display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0 0 26px;
     font-variant-numeric: tabular-nums; font-size: 13.5px;
   }}
+  /* Chevron affordance, 2026-09-21 -- a right-aligned indicator that a row
+     opens a fuller record, since "feature discoverability" feedback flagged
+     that selecting a row wasn't obvious. Muted by default, steps in on
+     hover/selection rather than competing with the badges at rest. */
+  .go {{
+    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    color: var(--border); transition: color .15s ease, transform .15s ease;
+  }}
+  .entity:hover .go {{ color: var(--muted); transform: translate(2px, -50%); }}
+  .entity.selected .go {{ color: var(--accent); }}
   .fig span {{ color: var(--muted); font-size: 11.5px; display: block; }}
   /* Dossier panel, 2026-09-15 -- selecting an entity opens its full record
      here instead of expanding inline: a long inline expand-and-scroll was
      real reporter feedback ("annoying to scroll thru"). Sticky beside the
      list on desktop; a slide-up sheet on narrow screens (media query below). */
   .dossier {{
-    flex: 1 1 380px; max-width: 420px; position: sticky; top: 20px;
+    flex: 1 1 380px; max-width: 420px; position: sticky; top: 68px;
     border: 1px solid var(--border); border-radius: 6px; background: var(--panel);
-    max-height: calc(100vh - 40px); overflow-y: auto; padding: 20px 22px 26px;
+    max-height: calc(100vh - 88px); overflow-y: auto; padding: 20px 22px 26px;
+    box-shadow: 0 4px 20px rgba(0,0,0,.06);
   }}
+  @media (prefers-color-scheme: dark) {{ .dossier {{ box-shadow: 0 4px 20px rgba(0,0,0,.35); }} }}
   .dossier-empty {{ color: var(--muted); font-size: 13.5px; text-align: center; padding: 50px 10px; }}
   .dossier-name {{ font: 600 21px/1.25 var(--serif); margin: 2px 0 8px; }}
   .dossier .figs {{ margin-left: 0; margin-bottom: 4px; }}
@@ -612,12 +646,18 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
   .pos-s {{ color: var(--support); }}
   .pos-o {{ color: var(--oppose); }}
   .pos-x {{ color: var(--neutral); }}
+  /* Filled, not the same bordered-secondary style as every other control --
+     real reporter feedback ("no download option on the live site") was this
+     button reading as low-priority even once it was moved above the fold. */
   .dl-btn {{
-    margin-top: 14px; font: 500 12.5px/1 inherit; padding: 7px 12px;
-    border: 1px solid var(--border); border-radius: 4px; background: var(--panel);
-    color: var(--text); cursor: pointer;
+    margin-top: 14px; font: 600 12.5px/1 inherit; padding: 9px 14px;
+    border: 1px solid var(--accent); border-radius: 4px; background: var(--accent);
+    color: #fff; cursor: pointer; display: inline-flex; align-items: center; gap: 7px;
+    transition: opacity .15s ease;
   }}
-  .dl-btn:hover {{ border-color: var(--accent); color: var(--accent); }}
+  .dl-btn:hover {{ opacity: .88; }}
+  .dl-btn:disabled {{ opacity: .6; cursor: default; }}
+  .dl-btn svg {{ flex: none; }}
   .txn-filter {{
     display: block; width: 100%; font: inherit; font-size: 13px;
     padding: 6px 9px; margin: 4px 0 6px; border: 1px solid var(--border);
@@ -642,13 +682,31 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
   @media (max-width: 860px) {{
     .layout {{ display: block; }}
     body.dossier-open {{ overflow: hidden; }}
+    /* Rows are cramped when badges wrap under a long name -- see .etop above
+       for the two-column desktop layout; on narrow screens the name gets its
+       own line and badges flow below it instead of squeezing beside it. */
+    /* flex: 1 1 240px on .ename is a min-width for the row layout above;
+       inside a column flex container that same shorthand becomes a 240px
+       flex-basis on the vertical axis and stretches the name box, so it
+       must be reset back to auto sizing here. */
+    .etop {{ flex-direction: column; align-items: flex-start; gap: 6px; }}
+    .ename {{ flex: none; }}
+    .figs {{ margin-left: 0; }}
     .dossier {{
       position: fixed; top: 8%; left: 0; right: 0; bottom: 0; z-index: 50;
       max-width: none; border-radius: 14px 14px 0 0; max-height: none;
       box-shadow: 0 -10px 30px rgba(0,0,0,.3);
       transform: translateY(100%); transition: transform .25s ease;
+      padding-top: 28px;
     }}
     .dossier.show {{ transform: translateY(0); }}
+    /* Drag-handle affordance signaling this is a dismissible sheet, matching
+       the pattern reporters already know from native share/action sheets. */
+    .dossier::before {{
+      content: ""; position: absolute; top: 10px; left: 50%;
+      transform: translateX(-50%); width: 36px; height: 4px; border-radius: 2px;
+      background: var(--border);
+    }}
     .dossier-close {{
       display: block; position: absolute; top: 10px; right: 12px;
       font: 22px/1 inherit; background: none; border: none; color: var(--muted);
@@ -664,17 +722,40 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
 </head>
 <body>
 <header>
-  <p class="kicker">Nebraska Public Records Hub</p>
   <h1>One name. Every record.</h1>
   <div class="sub">
-    <p>Cross-reference a name across Nebraska state contracts, campaign
-    contributions, lobbying registrations, financial disclosures, and federal
-    campaign finance &mdash; every figure links to the primary record and the
-    date it was retrieved. Collected by {source_links}.</p>
+    <p>The Nebraska Public Records Hub cross-references a name across state
+    contracts, campaign contributions, lobbying registrations, financial
+    disclosures, and federal campaign finance &mdash; every figure links to
+    the primary record and the date it was retrieved. Collected by
+    {source_links}.</p>
     <p>Names are matched by normalization and scoring; where a source publishes
     its own identifier, records are joined by that identifier instead. Select a
     row to see every spelling folded into it, and which record set each came from.</p>
   </div>
+</header>
+
+<div class="search-bar">
+  <div class="controls">
+    <div class="search">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="search" id="q" placeholder="Search an organization, or any of its name variants…" autocomplete="off" autofocus>
+    </div>
+    <div class="pills" id="pills">
+      <button class="pill active" data-f="">All entities</button>
+      <button class="pill" data-f="3">In all three</button>
+      <button class="pill" data-f="2">In two or more</button>
+      <button class="pill pill-contracts" data-f="contracts">Contracts</button>
+      <button class="pill pill-campaign_finance" data-f="campaign_finance">Contributions</button>
+      <button class="pill pill-lobbying" data-f="lobbying">Lobbying</button>
+      <button class="pill pill-disclosures" data-f="disclosures">Disclosures</button>
+      <button class="pill pill-fec" data-f="fec">FEC</button>
+    </div>
+  </div>
+  <p id="count"></p>
+</div>
+
+<div class="context">
   <div class="legend">
     {legend_html}
   </div>
@@ -694,25 +775,7 @@ def render(entities, summary, coverage, retrieved, total_indexed) -> str:
     <div class="stat"><b>{summary.get('hard_id_links', 0):,}</b><span>joined by source ID</span></div>
     <div class="stat"><b>{summary.get('awaiting_review', 0):,}</b><span>awaiting review</span></div>
   </div>
-</header>
-
-<div class="controls">
-  <div class="search">
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-    <input type="search" id="q" placeholder="Search an organization, or any of its name variants…" autocomplete="off" autofocus>
-  </div>
-  <div class="pills" id="pills">
-    <button class="pill active" data-f="">All entities</button>
-    <button class="pill" data-f="3">In all three</button>
-    <button class="pill" data-f="2">In two or more</button>
-    <button class="pill pill-contracts" data-f="contracts">Contracts</button>
-    <button class="pill pill-campaign_finance" data-f="campaign_finance">Contributions</button>
-    <button class="pill pill-lobbying" data-f="lobbying">Lobbying</button>
-    <button class="pill pill-disclosures" data-f="disclosures">Disclosures</button>
-    <button class="pill pill-fec" data-f="fec">FEC</button>
-  </div>
 </div>
-<p id="count"></p>
 
 <div class="layout">
   <main id="list"></main>
@@ -898,11 +961,15 @@ function render(rows, pool) {{
     const badges = ORDER.filter(s => e.sources.includes(s)).map(s =>
       '<span class="src-badge"><span class="dot b-' + s + '"></span>' + LABELS[s] + '</span>').join('') +
       (e.hard_id ? '<span class="id-tag">ID</span>' : '');
-    return '<div class="entity" data-idx="' + idx + '">' +
+    return '<div class="entity" data-idx="' + idx + '" tabindex="0" role="button" ' +
+      'aria-label="Open the full record for ' + esc(e.name) + '">' +
       '<div class="etop">' +
       '<div class="ename">' + esc(e.name) + '</div>' +
       '<div class="badges">' + badges + '</div></div>' +
       '<div class="figs">' + figures(e) + '</div>' +
+      '<svg class="go" width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
+      'stroke="currentColor" stroke-width="2" aria-hidden="true">' +
+      '<path d="M9 6l6 6-6 6"/></svg>' +
       '</div>';
   }}).join('');
 }}
@@ -1028,7 +1095,10 @@ function openDossier(idx) {{
     // PRIVACY: per-entity export only, per docs/PRIVACY.md rule 4 ("Per-search
     // CSV export is fine. A 'download all 240,000 contributors' button is
     // not.") -- never add a site-wide or filtered-list export button.
-    '<button class="dl-btn" type="button">Download this entity as CSV</button>' +
+    '<button class="dl-btn" type="button">' +
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>' +
+    '<span class="dl-label">Download this entity as CSV</span></button>' +
     '<div class="detail">' +
     '<h4>Why these records are grouped</h4>' + conf +
     '<h4>Name variants folded into this entity</h4>' + aliases +
@@ -1593,6 +1663,17 @@ list.addEventListener('click', ev => {{
   if (!row) return;
   openDossier(Number(row.dataset.idx));
 }});
+// tabindex="0" + role="button" on each row (added alongside the chevron
+// affordance) makes rows focusable, so Enter/Space needs to activate them
+// the same way a click does -- otherwise the row would be reachable by
+// keyboard but not actually operable, which is worse than not focusable.
+list.addEventListener('keydown', ev => {{
+  if (ev.key !== 'Enter' && ev.key !== ' ') return;
+  const row = ev.target.closest('.entity');
+  if (!row) return;
+  ev.preventDefault();
+  openDossier(Number(row.dataset.idx));
+}});
 
 dossier.addEventListener('click', ev => {{
   const closeBtn = ev.target.closest('.dossier-close');
@@ -1608,7 +1689,7 @@ dossier.addEventListener('click', ev => {{
   const wantsContracts = e.sources.includes('contracts');
   const wantsFec = e.sources.includes('fec');
   dlBtn.disabled = true;
-  dlBtn.textContent = 'Preparing…';
+  dlBtn.querySelector('.dl-label').textContent = 'Preparing…';
   Promise.all([
     wantsCf ? loadCampaignFinanceRows() : Promise.resolve(null),
     wantsCf ? loadCampaignExpenditures() : Promise.resolve(null),
@@ -1628,7 +1709,7 @@ dossier.addEventListener('click', ev => {{
     downloadCSV(slugify(e.name) + '.csv', entityToCSVRows(e, [], [], [], [], [], []));
   }}).finally(() => {{
     dlBtn.disabled = false;
-    dlBtn.textContent = 'Download this entity as CSV';
+    dlBtn.querySelector('.dl-label').textContent = 'Download this entity as CSV';
   }});
 }});
 
