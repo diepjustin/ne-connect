@@ -82,17 +82,31 @@ def _keyed_lobbying(principals, aliases):
     A principal's truncated table name and its full detail-page name normalize
     to different keys. Both are registered, both carry the same source_id, and
     authority.py unions them without scoring.
+
+    Only the first variant carries the principal's record_count and
+    total_amount; every other spelling carries zero. Each variant becomes its
+    own canonical_entities.csv row and build_site.py sums every row, so
+    copying the totals onto each spelling published 2x a principal's Form C
+    total and position count (Nebraska Chamber of Commerce: $3,808,622 and
+    8,258 positions against a real $1,904,311 and 4,129). The principal's own
+    name goes first, so the figure stays under that spelling.
     """
     import copy
 
     keyed = {}
     for source_id, party in principals.items():
-        for alias in aliases.get(source_id, {party.name}) | {party.name}:
+        spellings = [party.name] + sorted(aliases.get(source_id, set()) - {party.name})
+        counted = False
+        for alias in spellings:
             key = normalize_org(alias)
             if not key:
                 continue
             variant = copy.copy(party)
             variant.name = alias
+            if counted:
+                variant.record_count = 0
+                variant.total_amount = 0.0
+            counted = True
             keyed.setdefault(key, []).append(variant)
     return keyed
 

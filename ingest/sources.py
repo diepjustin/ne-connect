@@ -110,6 +110,23 @@ def load_contract_vendors(data_dir: Path = None):
     return vendors
 
 
+# Form B-7 (legacy formb72/formb73) is a corporation's or union's OWN report of
+# contributions it MADE. ne-campaign-finance's normalize_legacy.py maps the
+# state's "Committee Name" column -- which on these forms holds the reporting
+# corporation, the giver -- to filer_name, and the recipient committee to
+# source_name: the reverse of every other form. Read as-is, HO-CHUNK, INC.
+# "received" the $8.3M it gave and KEEP THE MONEY IN NEBRASKA "gave" what it
+# received. Left out of every total here until that direction is fixed
+# upstream: 75% of B-7 money ($64.9M of $86.7M) is also on the recipient
+# committee's own report, which is read normally, so leaving B-7 out never
+# asserts a false direction and never counts one gift twice.
+GIVER_REPORTED_FORMS = frozenset({"formb72", "formb73"})
+
+
+def _giver_reported(row) -> bool:
+    return row.get("source_form") in GIVER_REPORTED_FORMS
+
+
 def load_contributors(data_dir: Path = None, *, filename: str = "contributions.csv",
                        era: str = "modern"):
     """Campaign contributors, keyed by (raw source name, era).
@@ -134,6 +151,8 @@ def load_contributors(data_dir: Path = None, *, filename: str = "contributions.c
         for row in csv.DictReader(fh):
             if row.get("include_in_total") != "True":
                 continue  # see ne-campaign-finance README: avoids double-counting
+            if _giver_reported(row):
+                continue  # direction reversed upstream -- see GIVER_REPORTED_FORMS
             name = (row.get("source_name") or "").strip()
             if not name:
                 continue
@@ -200,6 +219,8 @@ def load_campaign_filers(data_dir: Path = None, *, filename: str = "contribution
 
     with path.open(encoding="utf-8", newline="") as fh:
         for row in csv.DictReader(fh):
+            if _giver_reported(row):
+                continue  # filer_name here is the giver -- see GIVER_REPORTED_FORMS
             filer_name = (row.get("filer_name") or "").strip()
             if not filer_name:
                 continue
@@ -249,8 +270,12 @@ def load_spend_only_filers(data_dir: Path = None):
         if not path.exists():
             continue
         with path.open(encoding="utf-8", newline="") as fh:
+            # A B-7 filer_name is the giver, not a filer load_campaign_filers()
+            # keeps -- counting it as known would leave its spending unreachable.
             known.update(
-                (row.get("filer_name") or "").strip() for row in csv.DictReader(fh)
+                (row.get("filer_name") or "").strip()
+                for row in csv.DictReader(fh)
+                if not _giver_reported(row)
             )
 
     filers = {}

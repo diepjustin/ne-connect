@@ -9,7 +9,7 @@ of keys once indiv24.zip is pulled. fec_orgs (committees/candidates) keeps every
 pairing the single merged "fec" dict used to have.
 """
 
-from build_entities import _city_columns, _pairings
+from build_entities import _city_columns, _keyed_lobbying, _pairings
 from sources import Party
 
 VENDORS, CONTRIBUTORS, LOBBYING, DISCLOSURES = object(), object(), object(), object()
@@ -70,3 +70,57 @@ def test_fec_orgs_keeps_every_pairing_the_merged_fec_dict_used_to_have():
         frozenset((LOBBYING, FEC_ORGS)),
         frozenset((DISCLOSURES, FEC_ORGS)),
     }
+
+
+def _principal(name="Nebraska Chamber of Commerce & Industry", records=4129, amount=1904311.14):
+    return Party(
+        name=name, source="lobbying", role="principal", entity_type="organization",
+        record_count=records, total_amount=amount, source_id="1652",
+    )
+
+
+def _variants(keyed):
+    return [variant for variants in keyed.values() for variant in variants]
+
+
+def test_keyed_lobbying_counts_a_principal_once_across_alias_keys():
+    """Every variant becomes its own canonical_entities.csv row and
+    build_site.py sums every row, so the principal's totals must ride on one
+    variant only. Copying them onto each spelling published 2x the Chamber's
+    Form C total and position count on the live site."""
+    keyed = _keyed_lobbying(
+        {"1652": _principal()},
+        {"1652": {"Nebraska Chamber of Commerce & Industry",
+                  "Nebraska Chamber of Commerce & Indu..."}},
+    )
+    variants = _variants(keyed)
+    assert len(keyed) == 2  # both spellings still reach the index
+    assert sum(v.record_count for v in variants) == 4129
+    assert round(sum(v.total_amount for v in variants), 2) == 1904311.14
+    carrying = [v for v in variants if v.record_count]
+    assert [v.name for v in carrying] == ["Nebraska Chamber of Commerce & Industry"]
+
+
+def test_keyed_lobbying_counts_once_when_two_spellings_share_a_key():
+    """Two raw spellings that normalize to the same key land in one list --
+    the doubling happened there too."""
+    keyed = _keyed_lobbying(
+        {"1652": _principal()},
+        {"1652": {"Nebraska Chamber of Commerce and Industry",
+                  "NEBRASKA CHAMBER OF COMMERCE & INDUSTRY"}},
+    )
+    assert len(keyed) == 1
+    variants = _variants(keyed)
+    assert len(variants) == 3
+    assert sum(v.record_count for v in variants) == 4129
+    assert round(sum(v.total_amount for v in variants), 2) == 1904311.14
+
+
+def test_keyed_lobbying_keeps_totals_when_the_principal_name_normalizes_to_nothing():
+    keyed = _keyed_lobbying(
+        {"1652": _principal(name="...")},
+        {"1652": {"Nebraska Chamber of Commerce & Industry"}},
+    )
+    variants = _variants(keyed)
+    assert [v.name for v in variants] == ["Nebraska Chamber of Commerce & Industry"]
+    assert variants[0].record_count == 4129

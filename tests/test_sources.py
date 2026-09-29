@@ -214,3 +214,39 @@ def test_spend_only_filer_skipped_when_already_a_known_filer(tmp_path):
     )
     filers = load_spend_only_filers(tmp_path)
     assert filers == {}
+
+
+# Form B-7 rows as ne-campaign-finance's normalize_legacy.py writes them today:
+# filer_name is the corporation that GAVE, source_name the committee that got it.
+# The formb1ab row is the recipient committee's own report of the same gift.
+LEGACY_WITH_B7 = """source_name,source_type,amount,include_in_total,filer_name,city,source_form
+HO-CHUNK INC,Organization,1000.00,True,KEEP THE MONEY IN NEBRASKA,Winnebago,formb1ab
+KEEP THE MONEY IN NEBRASKA,,1000.00,True,HO-CHUNK INC,,formb72
+KEEP THE MONEY IN NEBRASKA,,250.00,True,HO-CHUNK INC,,formb73
+"""
+
+EXPENDITURES_LEGACY = """filer_name,payee_name,amount
+HO-CHUNK INC,SOME PRINTER,400.00
+"""
+
+
+def test_b7_rows_never_count_as_money_given_by_the_recipient_committee(tmp_path):
+    (tmp_path / "contributions_legacy.csv").write_text(LEGACY_WITH_B7)
+    contributors = load_legacy_contributors(tmp_path)
+    assert set(contributors) == {("HO-CHUNK INC", "pre2022")}
+    assert contributors[("HO-CHUNK INC", "pre2022")].total_amount == 1000.0
+
+
+def test_b7_rows_never_count_as_money_received_by_the_corporation(tmp_path):
+    (tmp_path / "contributions_legacy.csv").write_text(LEGACY_WITH_B7)
+    filers = load_legacy_campaign_filers(tmp_path)
+    assert set(filers) == {("filer:KEEP THE MONEY IN NEBRASKA", "pre2022")}
+    assert filers[("filer:KEEP THE MONEY IN NEBRASKA", "pre2022")].total_amount == 1000.0
+
+
+def test_b7_only_corporation_with_spending_is_still_a_spend_only_filer(tmp_path):
+    """Its B-7 rows no longer make it a filer, so they must not mark it as
+    known either -- otherwise its own spending would have no entity at all."""
+    (tmp_path / "contributions_legacy.csv").write_text(LEGACY_WITH_B7)
+    (tmp_path / "expenditures_legacy.csv").write_text(EXPENDITURES_LEGACY)
+    assert ("filer:HO-CHUNK INC", "modern") in load_spend_only_filers(tmp_path)
