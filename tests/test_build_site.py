@@ -294,3 +294,71 @@ def test_retrieval_dates_no_disclosures_note_once_filings_exist(tmp_path, monkey
 
     assert dates["disclosures"] == "2026-09-10"
     assert "disclosures_note" not in dates
+
+
+def _cf_row(role, records, amount, era="modern", name="PROTECT OUR RIGHTS"):
+    return {
+        "entity_id": "1", "canonical_name": name, "alias": name,
+        "normalized_key": name, "source": "campaign_finance", "era": era,
+        "role": role, "entity_type": "organization", "records": str(records),
+        "amount": str(amount), "source_id": "", "source_url": "",
+    }
+
+
+def _contract_row(name="PROTECT OUR RIGHTS"):
+    return {
+        "entity_id": "1", "canonical_name": name, "alias": name,
+        "normalized_key": name, "source": "contracts", "era": "modern",
+        "role": "vendor", "entity_type": "organization", "records": "1",
+        "amount": "100.0", "source_id": "", "source_url": "",
+    }
+
+
+def test_money_received_is_never_added_to_money_given_inline(tmp_path, monkeypatch):
+    """PROTECT OUR RIGHTS gave $1,270,703 and received $17,688,585, and the
+    live site published the sum as "$18,959,288 Contributions". Given and
+    received stay separate figures."""
+    monkeypatch.setattr(build_site, "DATA_DIR", tmp_path)
+    _write_canonical(
+        tmp_path,
+        _contract_row(),
+        _cf_row("contributor", 6, 1270703.0),
+        _cf_row("filer", 1082, 17688585.0),
+    )
+
+    entity = build_site.build_entities()[0]
+
+    assert entity["contrib_eras"] == {"modern": {"records": 6, "amount": 1270703.0}}
+    assert entity["receipt_eras"] == {"modern": {"records": 1082, "amount": 17688585.0}}
+    assert entity["totals"]["campaign_finance"] == {"records": 6, "amount": 1270703.0}
+
+
+def test_filer_only_entity_still_lists_campaign_finance_inline(tmp_path, monkeypatch):
+    """sources is what loads the spending table; a committee with receipts and
+    no gifts must keep it even though its money-given total is zero."""
+    monkeypatch.setattr(build_site, "DATA_DIR", tmp_path)
+    _write_canonical(tmp_path, _contract_row(), _cf_row("filer", 1082, 17688585.0))
+
+    entity = build_site.build_entities()[0]
+
+    assert "campaign_finance" in entity["sources"]
+    assert entity["totals"]["campaign_finance"] == {"records": 0, "amount": 0}
+    assert entity["contrib_eras"] == {}
+    assert entity["receipt_eras"] == {"modern": {"records": 1082, "amount": 17688585.0}}
+
+
+def test_money_received_is_never_added_to_money_given_in_the_lazy_index():
+    rows = [
+        _cf_row("contributor", 6, 1270703.0),
+        _cf_row("filer", 1082, 17688585.0),
+        _cf_row("contributor", 3, 500.0, era="pre2022"),
+        _cf_row("filer", 7, 900.0, era="pre2022"),
+    ]
+    row = build_full_index(rows)[0]
+    col = {name: i for i, name in enumerate(INDEX_COLUMNS)}
+
+    assert len(row) == len(INDEX_COLUMNS)
+    assert (row[col["contrib_amt"]], row[col["contrib_recs"]]) == (1270703, 6)
+    assert (row[col["receipts_amt"]], row[col["receipts_recs"]]) == (17688585, 1082)
+    assert (row[col["contrib_amt_legacy"]], row[col["contrib_recs_legacy"]]) == (500, 3)
+    assert (row[col["receipts_amt_legacy"]], row[col["receipts_recs_legacy"]]) == (900, 7)

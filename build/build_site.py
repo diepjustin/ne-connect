@@ -93,6 +93,9 @@ INDEX_COLUMNS = [
     # header-only, so there's a real dollar figure to carry. Appended last to
     # match build_full_index()'s append order -- see that function.
     "fec_amt",
+    # Money a campaign-finance filer RECEIVED, split by era the same way.
+    # contrib_* above is money given only; the two are never summed.
+    "receipts_amt", "receipts_recs", "receipts_amt_legacy", "receipts_recs_legacy",
 ]
 
 
@@ -261,17 +264,33 @@ def build_entities():
         # eras can be rendered as two lines and never silently summed --
         # pre-2022 money and 2022+ money are not the same claim.
         era_totals = defaultdict(lambda: {"records": 0, "amount": 0.0})
+        # Money a committee RECEIVED (role=filer) is a different figure from
+        # money it GAVE (role=contributor) and is never added to it: summing
+        # the two published "PROTECT OUR RIGHTS" as $18.96M in contributions
+        # when it gave $1.27M and received $17.69M. totals and
+        # era_totals stay money given; receipts get their own per-era figure.
+        receipt_eras = defaultdict(lambda: {"records": 0, "amount": 0.0})
         aliases = {}
         lobby_id = ""
         disclosure_ids = []
         for member in members:
             source = member["source"]
-            totals[source]["records"] += int(member["records"] or 0)
-            totals[source]["amount"] += float(member["amount"] or 0)
+            # Touched for every member, even one whose money goes elsewhere,
+            # so `sources` below still lists a filer-only entity's source.
+            bucket = totals[source]
             if source == "campaign_finance":
                 era = member.get("era") or "modern"
-                era_totals[era]["records"] += int(member["records"] or 0)
-                era_totals[era]["amount"] += float(member["amount"] or 0)
+                if member.get("role") == "filer":
+                    receipt_eras[era]["records"] += int(member["records"] or 0)
+                    receipt_eras[era]["amount"] += float(member["amount"] or 0)
+                else:
+                    era_totals[era]["records"] += int(member["records"] or 0)
+                    era_totals[era]["amount"] += float(member["amount"] or 0)
+                    bucket["records"] += int(member["records"] or 0)
+                    bucket["amount"] += float(member["amount"] or 0)
+            else:
+                bucket["records"] += int(member["records"] or 0)
+                bucket["amount"] += float(member["amount"] or 0)
             if source == "lobbying" and member.get("source_id"):
                 lobby_id = member["source_id"]
             if source == "disclosures" and member.get("source_id"):
@@ -297,6 +316,10 @@ def build_entities():
                 "contrib_eras": {
                     era: {"records": value["records"], "amount": round(value["amount"], 2)}
                     for era, value in era_totals.items()
+                },
+                "receipt_eras": {
+                    era: {"records": value["records"], "amount": round(value["amount"], 2)}
+                    for era, value in receipt_eras.items()
                 },
                 "aliases": [
                     {"name": name, "sources": sorted(a["sources"]), "url": a["url"]}
@@ -364,16 +387,21 @@ def build_full_index(rows):
         # render pre-2022 money separately, same reasoning as the inline
         # index's contrib_eras -- never summed into one figure.
         era_totals = defaultdict(lambda: [0, 0.0])
+        # Money received (role=filer), never added to money given -- same
+        # reasoning as build_entities()'s receipt_eras.
+        receipt_eras = defaultdict(lambda: [0, 0.0])
         lobby_id = ""
         disclosure_ids = []
         for member in members:
             bits |= SOURCE_BITS[member["source"]]
-            totals[member["source"]][0] += int(member["records"] or 0)
-            totals[member["source"]][1] += float(member["amount"] or 0)
             if member["source"] == "campaign_finance":
                 era = member.get("era") or "modern"
-                era_totals[era][0] += int(member["records"] or 0)
-                era_totals[era][1] += float(member["amount"] or 0)
+                target = receipt_eras if member.get("role") == "filer" else era_totals
+                target[era][0] += int(member["records"] or 0)
+                target[era][1] += float(member["amount"] or 0)
+            else:
+                totals[member["source"]][0] += int(member["records"] or 0)
+                totals[member["source"]][1] += float(member["amount"] or 0)
             if member["source"] == "lobbying" and member.get("source_id"):
                 lobby_id = member["source_id"]
             if member["source"] == "disclosures" and member.get("source_id"):
@@ -381,6 +409,8 @@ def build_full_index(rows):
         contracts = totals["contracts"]
         finance_modern = era_totals["modern"]
         finance_legacy = era_totals["pre2022"]
+        receipts_modern = receipt_eras["modern"]
+        receipts_legacy = receipt_eras["pre2022"]
         lobbying = totals["lobbying"]
         disclosures = totals["disclosures"]
         fec = totals["fec"]
@@ -398,6 +428,8 @@ def build_full_index(rows):
             fec[0],
             sorted(set(disclosure_ids)),
             round(fec[1]),
+            round(receipts_modern[1]), receipts_modern[0],
+            round(receipts_legacy[1]), receipts_legacy[0],
         ])
     index.sort(key=lambda e: (-bin(e[1]).count("1"), -e[2], e[0]))
     return index
@@ -865,22 +897,30 @@ function esc(s) {{
 // Phase 1.4: pre-2022 money and 2022+ money are never summed into one
 // figure -- the state's own record of the older era is frozen and the two
 // periods aren't the same claim. Two distinct eras render as two lines;
-// one era (the common case today) renders exactly as before.
+// one era (the common case today) renders without an era label.
+//
+// Money given (contrib_eras) and money a filer received (receipt_eras) are
+// never summed either: they are different figures, and adding them made a
+// committee that gave $1.27M and received $17.69M read "$19.0M Contributions".
+// Each renders as its own line, and a zero era renders nothing (a spend-only
+// filer has an all-zero receipts figure by construction).
+function hasEraMoney(eras) {{
+  return Object.values(eras || {{}}).some(t => t.records || t.amount);
+}}
+
 function campaignFinanceFigures(e) {{
-  const eras = e.contrib_eras || {{}};
-  const keys = Object.keys(eras);
-  if (keys.length < 2) {{
-    const t = e.totals.campaign_finance;
-    return '<div class="fig">' + money(t.amount) + '<span>' + LABELS.campaign_finance +
-      ' · ' + t.records.toLocaleString() + ' records · itemized only</span></div>';
-  }}
   const ERA_LABEL = {{modern: '2022–present', pre2022: 'pre-2022, frozen by the state'}};
-  return keys.sort().map(era => {{
-    const t = eras[era];
-    return '<div class="fig">' + money(t.amount) + '<span>' + LABELS.campaign_finance +
-      ' (' + (ERA_LABEL[era] || era) + ') · ' + t.records.toLocaleString() +
-      ' records · itemized only</span></div>';
-  }}).join('');
+  const lines = (eras, label) => {{
+    const keys = Object.keys(eras || {{}}).filter(era => eras[era].records || eras[era].amount);
+    return keys.sort().map(era => {{
+      const t = eras[era];
+      const when = keys.length > 1 ? ' (' + (ERA_LABEL[era] || era) + ')' : '';
+      return '<div class="fig">' + money(t.amount) + '<span>' + label + when + ' · ' +
+        t.records.toLocaleString() + ' records · itemized only</span></div>';
+    }}).join('');
+  }};
+  return lines(e.contrib_eras, LABELS.campaign_finance + ' given') +
+    lines(e.receipt_eras, LABELS.campaign_finance + ' received');
 }}
 
 function figures(e) {{
@@ -890,7 +930,9 @@ function figures(e) {{
   // itemized receipts
   // would show a misleading "$0 · 0 records" instead of nothing at all
   // (its spending shows in the itemized table below regardless).
-  return ORDER.filter(s => e.totals[s] && (e.totals[s].records || e.totals[s].amount)).map(s => {{
+  return ORDER.filter(s => s === 'campaign_finance'
+    ? hasEraMoney(e.contrib_eras) || hasEraMoney(e.receipt_eras)
+    : e.totals[s] && (e.totals[s].records || e.totals[s].amount)).map(s => {{
     if (s === 'campaign_finance') return campaignFinanceFigures(e);
     const t = e.totals[s];
     // Disclosures have no dollar concept at all -- a C-1 reports interests
@@ -1026,7 +1068,8 @@ function openDossier(idx) {{
     // Phase 1.4: an entity with pre-2022 campaign-finance money also gets
     // the frozen-data note, once, regardless of whether it also has
     // modern-era money.
-    if (s === 'campaign_finance' && e.contrib_eras && e.contrib_eras.pre2022
+    if (s === 'campaign_finance'
+        && ((e.contrib_eras && e.contrib_eras.pre2022) || (e.receipt_eras && e.receipt_eras.pre2022))
         && RETRIEVED.campaign_finance_legacy_note) {{
       line += '<div class="alias">' + esc(RETRIEVED.campaign_finance_legacy_note) +
         '</div>';
@@ -1170,6 +1213,7 @@ function widen(row) {{
   if (bits & BITS.fec) sources.push('fec');
   const totals = {{}};
   const contribEras = {{}};
+  const receiptEras = {{}};
   if (bits & BITS.contracts) {{
     totals.contracts = {{records: row[COL.contract_recs], amount: row[COL.contract_amt]}};
   }}
@@ -1183,6 +1227,14 @@ function widen(row) {{
     totals.campaign_finance = {{records: modernRecs + legacyRecs, amount: modernAmt + legacyAmt}};
     if (modernRecs) contribEras.modern = {{records: modernRecs, amount: modernAmt}};
     if (legacyRecs) contribEras.pre2022 = {{records: legacyRecs, amount: legacyAmt}};
+    // Money this entity received as a filer -- its own figure, never added
+    // to money given above. `|| 0` so an index built before these columns
+    // existed reads as no receipts rather than NaN.
+    const recRecs = row[COL.receipts_recs] || 0, recAmt = row[COL.receipts_amt] || 0;
+    const recLegacyRecs = row[COL.receipts_recs_legacy] || 0;
+    const recLegacyAmt = row[COL.receipts_amt_legacy] || 0;
+    if (recRecs) receiptEras.modern = {{records: recRecs, amount: recAmt}};
+    if (recLegacyRecs) receiptEras.pre2022 = {{records: recLegacyRecs, amount: recLegacyAmt}};
   }}
   if (bits & BITS.lobbying) {{
     totals.lobbying = {{records: row[COL.lobby_recs]}};
@@ -1200,7 +1252,7 @@ function widen(row) {{
     name: n, sources, url: '',
   }}));
   return {{
-    name, sources, totals, contrib_eras: contribEras, aliases, match: null,
+    name, sources, totals, contrib_eras: contribEras, receipt_eras: receiptEras, aliases, match: null,
     hard_id: false, lite: true, lobby_id: lobbyId, disclosure_ids: disclosureIds,
     links: Object.fromEntries(sources.map(s => [s, SOURCE_LINK[s](name, lobbyId)])),
   }};
@@ -1551,15 +1603,20 @@ function entityToCSVRows(e, cfTxns, spending, positions, discItems, contractTxns
   const push = obj => rows.push(CSV_HEADER.map(col => obj[col] ?? ''));
 
   ORDER.filter(s => e.totals[s]).forEach(s => {{
-    const eras = s === 'campaign_finance' ? (e.contrib_eras || {{}}) : {{}};
-    if (Object.keys(eras).length > 1) {{
-      Object.keys(eras).sort().forEach(era => {{
-        const t = eras[era];
-        push({{
-          entity: e.name, record_type: 'summary', source: s, amount: t.amount,
-          records: t.records, era, note: 'itemized only',
+    // One summary row per (money given | money received) x era, never a sum
+    // across either -- same split as campaignFinanceFigures().
+    if (s === 'campaign_finance') {{
+      [[e.contrib_eras, 'contributions given'], [e.receipt_eras, 'contributions received']]
+        .forEach(([eras, what]) => {{
+          Object.keys(eras || {{}}).sort().forEach(era => {{
+            const t = eras[era];
+            if (!t.records && !t.amount) return;
+            push({{
+              entity: e.name, record_type: 'summary', source: s, amount: t.amount,
+              records: t.records, era, note: what + ', itemized only',
+            }});
+          }});
         }});
-      }});
       return;
     }}
     const t = e.totals[s];
